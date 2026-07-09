@@ -13,7 +13,7 @@ from collections.abc import Mapping
 import pymc as pm
 import xarray as xr
 
-from pymc_forecast.data import TIME_DIM, as_dataarray, null_covariates
+from pymc_forecast.data import TIME_DIM, as_dataarray, extend_time_index, null_covariates
 from pymc_forecast.exceptions import MethodResolutionError, OptionalDependencyError
 from pymc_forecast.model import build_model
 from pymc_forecast.prediction import (
@@ -71,22 +71,32 @@ class BaseForecaster(abc.ABC):
 
     def forecast(
         self,
-        covariates,
+        covariates=None,
         num_samples: int = 100,
         *,
+        horizon: int | None = None,
         var_names=None,
         random_seed=None,
         progressbar: bool = False,
     ):
-        """Sample forecasts for the covariate steps beyond the training window.
+        """Sample forecasts beyond the training window.
+
+        Provide the horizon in one of two ways: pass ``covariates`` spanning
+        the training window plus the forecast steps, or — for a covariate-free
+        model — pass ``horizon=N`` to forecast ``N`` steps past the training
+        data (its time coord is extended at the inferred spacing).
 
         Parameters
         ----------
         covariates
-            Covariates spanning the training window plus the forecast horizon
-            (time coords must extend the training data's).
+            Covariates spanning training window + forecast horizon (time coords
+            must extend the training data's). Mutually exclusive with
+            ``horizon``.
         num_samples
             Number of posterior draws (and forecast samples).
+        horizon
+            Number of steps to forecast past the training data (covariate-free
+            models only). Mutually exclusive with ``covariates``.
         var_names, random_seed, progressbar
             Passed through to :func:`pymc_forecast.prediction.forecast`.
 
@@ -95,6 +105,12 @@ class BaseForecaster(abc.ABC):
         DataTree
             With a ``predictions`` group carrying ``time_future`` coords.
         """
+        if (covariates is None) == (horizon is None):
+            msg = "pass exactly one of covariates or horizon"
+            raise ValueError(msg)
+        if horizon is not None:
+            full_index = extend_time_index(self._data[TIME_DIM].values, horizon)
+            covariates = null_covariates(full_index)
         posterior = self.draw_posterior(num_samples, random_seed)
         return _forecast(
             self.model_fn,

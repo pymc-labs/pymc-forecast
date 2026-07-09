@@ -9,6 +9,7 @@ from pymc_forecast.data import (
     FUTURE_DIM,
     TIME_DIM,
     as_dataarray,
+    extend_time_index,
     null_covariates,
 )
 from pymc_forecast.evaluate import (
@@ -88,6 +89,7 @@ __all__ = [
     "eval_pinball",
     "eval_rmse",
     "evaluate_forecast",
+    "extend_time_index",
     "forecast",
     "fourier_features",
     "make_mase",

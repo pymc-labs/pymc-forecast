@@ -3,7 +3,12 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from pymc_forecast.data import as_dataarray, null_covariates, validate_alignment
+from pymc_forecast.data import (
+    as_dataarray,
+    extend_time_index,
+    null_covariates,
+    validate_alignment,
+)
 from pymc_forecast.exceptions import AlignmentError
 
 
@@ -57,6 +62,31 @@ class TestNullCovariates:
         assert da.shape == (6, 0)
         assert da.dims == ("time", "covariate")
         np.testing.assert_array_equal(da["time"].values, idx.values)
+
+
+class TestExtendTimeIndex:
+    def test_datetime_inferred_freq(self):
+        idx = pd.date_range("2024-01-07", periods=5, freq="W")
+        out = extend_time_index(idx, 3)
+        assert len(out) == 8
+        assert out[5] == idx[-1] + pd.Timedelta(weeks=1)
+        assert out[-1] == idx[-1] + pd.Timedelta(weeks=3)
+
+    def test_numeric_constant_step(self):
+        out = extend_time_index(np.array([0, 2, 4, 6]), 2)
+        np.testing.assert_array_equal(np.asarray(out), [0, 2, 4, 6, 8, 10])
+
+    def test_horizon_zero_is_identity(self):
+        idx = pd.date_range("2024-01-01", periods=3, freq="D")
+        assert len(extend_time_index(idx, 0)) == 3
+
+    def test_negative_horizon_rejected(self):
+        with pytest.raises(AlignmentError, match="non-negative"):
+            extend_time_index(np.arange(3), -1)
+
+    def test_uneven_numeric_rejected(self):
+        with pytest.raises(AlignmentError, match="evenly spaced"):
+            extend_time_index(np.array([0, 1, 4]), 2)
 
 
 class TestValidateAlignment:

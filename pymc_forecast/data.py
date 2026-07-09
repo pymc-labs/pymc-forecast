@@ -14,7 +14,14 @@ import xarray as xr
 
 from pymc_forecast.exceptions import AlignmentError
 
-__all__ = ["FUTURE_DIM", "TIME_DIM", "as_dataarray", "null_covariates", "validate_alignment"]
+__all__ = [
+    "FUTURE_DIM",
+    "TIME_DIM",
+    "as_dataarray",
+    "extend_time_index",
+    "null_covariates",
+    "validate_alignment",
+]
 
 TIME_DIM = "time"
 """Dim name of the observed (in-sample) time dimension."""
@@ -102,6 +109,53 @@ def null_covariates(index) -> xr.DataArray:
         dims=(TIME_DIM, _DEFAULT_SECOND_DIM["covariates"]),
         coords={TIME_DIM: index},
     )
+
+
+def extend_time_index(index, horizon: int):
+    """Extend a time index by ``horizon`` steps, inferring the spacing.
+
+    Used to build the forecast horizon for covariate-free models: a
+    ``DatetimeIndex`` is extended at its inferred frequency, a numeric index by
+    its constant step. Returns the full ``observed + horizon`` index.
+
+    Raises
+    ------
+    AlignmentError
+        If a datetime frequency cannot be inferred, or the numeric spacing is
+        not constant.
+    """
+    import pandas as pd
+
+    if horizon < 0:
+        msg = f"horizon must be non-negative, got {horizon}"
+        raise AlignmentError(msg)
+    idx = pd.Index(index)
+    if horizon == 0:
+        return idx
+    if isinstance(idx, pd.DatetimeIndex):
+        freq = idx.freq or pd.infer_freq(idx)
+        if freq is None:
+            msg = (
+                "cannot infer a frequency from the datetime index to build the "
+                "forecast horizon; pass explicit covariates instead of horizon="
+            )
+            raise AlignmentError(msg)
+        future = pd.date_range(idx[-1], periods=horizon + 1, freq=freq)[1:]
+        return idx.append(future)
+    values = np.asarray(idx)
+    if len(values) < 2:
+        step = 1
+    else:
+        steps = np.diff(values)
+        if not np.allclose(steps, steps[0]):
+            msg = (
+                "numeric time index is not evenly spaced; cannot extend by "
+                "horizon=, pass explicit covariates instead"
+            )
+            raise AlignmentError(msg)
+        step = steps[0]
+    future = values[-1] + step * np.arange(1, horizon + 1)
+    return pd.Index(np.concatenate([values, future]))
 
 
 def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:

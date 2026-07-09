@@ -67,6 +67,27 @@ class TestForecasterVI:
             Forecaster(linear_model, data, cov, method="not_a_method", num_steps=10)
 
 
+class TestForecastByHorizon:
+    """The covariate-free horizon= shortcut on a random-walk model."""
+
+    @pytest.fixture(scope="class")
+    def fc(self):
+        data, _ = make_random_walk_data(t_obs=40, horizon=0)
+        return Forecaster(random_walk_model, data, num_steps=4_000, random_seed=SEED)
+
+    def test_horizon_builds_future(self, fc):
+        pred = fc.forecast(horizon=5, num_samples=100, random_seed=SEED)["predictions"]
+        assert pred["forecast"].sizes["time_future"] == 5
+        np.testing.assert_array_equal(pred["time_future"].values, np.arange(40, 45))
+
+    def test_exactly_one_of_covariates_horizon(self, fc):
+        _, cov = make_random_walk_data()
+        with pytest.raises(ValueError, match="exactly one"):
+            fc.forecast(cov, horizon=5)
+        with pytest.raises(ValueError, match="exactly one"):
+            fc.forecast()
+
+
 class TestHMCForecaster:
     @pytest.fixture(scope="class")
     def fc(self):
