@@ -11,6 +11,11 @@ from pymc_forecast.data import (
     as_dataarray,
     null_covariates,
 )
+from pymc_forecast.evaluate import (
+    BacktestResult,
+    backtest,
+    results_to_dataframe,
+)
 from pymc_forecast.exceptions import (
     AlignmentError,
     BacktestWindowError,
@@ -19,10 +24,25 @@ from pymc_forecast.exceptions import (
     OptionalDependencyError,
     PymcForecastError,
 )
+from pymc_forecast.features import fourier_features, periodic_repeat
 from pymc_forecast.forecaster import (
     Forecaster,
     HMCForecaster,
     PathfinderForecaster,
+)
+from pymc_forecast.gaussian import conditional_mvn, predict_mvn
+from pymc_forecast.markov import markov_time_series
+from pymc_forecast.metrics import (
+    DEFAULT_METRICS,
+    crps_empirical,
+    eval_coverage,
+    eval_crps,
+    eval_interval_score,
+    eval_mae,
+    eval_pinball,
+    eval_rmse,
+    evaluate_forecast,
+    make_mase,
 )
 from pymc_forecast.model import (
     ForecastingModel,
@@ -40,9 +60,11 @@ from pymc_forecast.prediction import (
 __version__ = "0.0.1.dev0"
 
 __all__ = [
+    "DEFAULT_METRICS",
     "FUTURE_DIM",
     "TIME_DIM",
     "AlignmentError",
+    "BacktestResult",
     "BacktestWindowError",
     "Forecaster",
     "ForecastingModel",
@@ -55,11 +77,27 @@ __all__ = [
     "PymcForecastError",
     "__version__",
     "as_dataarray",
+    "backtest",
     "build_model",
+    "conditional_mvn",
+    "crps_empirical",
+    "eval_coverage",
+    "eval_crps",
+    "eval_interval_score",
+    "eval_mae",
+    "eval_pinball",
+    "eval_rmse",
+    "evaluate_forecast",
     "forecast",
+    "fourier_features",
+    "make_mase",
+    "markov_time_series",
     "null_covariates",
+    "periodic_repeat",
     "predict",
     "predict_in_sample",
+    "predict_mvn",
+    "results_to_dataframe",
     "thin_draws",
     "time_series",
 ]
