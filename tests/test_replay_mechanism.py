@@ -55,15 +55,16 @@ def build_model(data: np.ndarray, future: int) -> pm.Model:
 @pytest.fixture(scope="module")
 def nuts_posterior(data):
     with build_model(data, future=0):
-        return pm.sample(
-            draws=200, tune=300, chains=2, progressbar=False, random_seed=SEED
-        )
+        return pm.sample(draws=200, tune=300, chains=2, progressbar=False, random_seed=SEED)
 
 
 @pytest.fixture(scope="module")
 def advi_posterior(data):
     approx = pm.fit(
-        n=20_000, method="advi", model=build_model(data, future=0), random_seed=SEED,
+        n=20_000,
+        method="advi",
+        model=build_model(data, future=0),
+        random_seed=SEED,
         progressbar=False,
     )
     return approx.sample(400, random_seed=SEED)
@@ -97,9 +98,7 @@ def test_forecast_continues_from_replayed_state(kind, data, request):
         "were probably resampled from the prior instead of replayed"
     )
     assert set(pred["forecast"].dims) >= {"time_future"}
-    np.testing.assert_array_equal(
-        pred["time_future"].values, np.arange(T_OBS, T_OBS + HORIZON)
-    )
+    np.testing.assert_array_equal(pred["time_future"].values, np.arange(T_OBS, T_OBS + HORIZON))
 
 
 def test_future_latents_are_prior_draws_not_replay(nuts_posterior, data):
