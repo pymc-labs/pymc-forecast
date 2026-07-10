@@ -22,6 +22,7 @@ dependencies = [
     "pymc-extras>=0.2",
     "arviz>=0.20",
     "numpy",
+    "pooch",
     "xarray",
 ]
 
