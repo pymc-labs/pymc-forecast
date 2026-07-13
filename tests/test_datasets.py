@@ -1,7 +1,13 @@
 import numpy as np
 import pandas as pd
+import pytest
 
-from pymc_forecast.datasets import load_bart_od, load_bart_weekly, load_victoria_electricity
+from pymc_forecast.datasets import (
+    load_bart_od,
+    load_bart_weekly,
+    load_bart_weekly_by_origin,
+    load_victoria_electricity,
+)
 
 
 def test_bart_loaders(monkeypatch, tmp_path):
@@ -31,6 +37,18 @@ def test_bart_loaders(monkeypatch, tmp_path):
     np.testing.assert_array_equal(rides["time"], np.arange(2))
     np.testing.assert_allclose(rides, np.log([7 * 24 * 4, 7 * 24 * 8]))
     assert rides.name == "log_rides"
+
+    panel = load_bart_weekly_by_origin(num_series=1)
+    assert panel.dims == ("time", "series")
+    assert panel.shape == (2, 1)
+    np.testing.assert_array_equal(panel["series"], ["B"])
+    np.testing.assert_allclose(panel[:, 0], np.log1p([7 * 24 * 2, 7 * 24 * 4]))
+
+    all_stations = load_bart_weekly_by_origin(num_series=None)
+    np.testing.assert_array_equal(all_stations["series"], stations)
+
+    with pytest.raises(ValueError, match="positive or None"):
+        load_bart_weekly_by_origin(num_series=0)
 
 
 def test_victoria_electricity():

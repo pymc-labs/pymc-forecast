@@ -1,9 +1,10 @@
 """Dataset helpers for the examples and docs.
 
 :func:`load_bart_od` downloads and caches the complete hourly BART
-origin-destination panel. :func:`load_bart_weekly` derives the univariate
-example series from that source, while :func:`load_victoria_electricity` reads
-a small CSV bundled with the package. All loaders return labeled arrays.
+origin-destination panel. :func:`load_bart_weekly` and
+:func:`load_bart_weekly_by_origin` derive compact weekly examples from that
+source, while :func:`load_victoria_electricity` reads a small CSV bundled with
+the package. All loaders return labeled arrays.
 """
 
 import importlib.resources
@@ -16,7 +17,12 @@ import xarray as xr
 
 from pymc_forecast.data import TIME_DIM
 
-__all__ = ["load_bart_od", "load_bart_weekly", "load_victoria_electricity"]
+__all__ = [
+    "load_bart_od",
+    "load_bart_weekly",
+    "load_bart_weekly_by_origin",
+    "load_victoria_electricity",
+]
 
 _HOURS_PER_WEEK = 24 * 7
 _VICTORIA_START = "2014-01-01"
@@ -95,6 +101,54 @@ def load_bart_weekly() -> xr.DataArray:
         values,
         dims=(TIME_DIM,),
         coords={TIME_DIM: np.arange(values.size)},
+        name="log_rides",
+    )
+
+
+def load_bart_weekly_by_origin(num_series: int | None = 8) -> xr.DataArray:
+    """Load a weekly BART ridership panel grouped by origin station.
+
+    Counts are summed over destination stations and aggregated into
+    non-overlapping weeks before applying ``log1p``. Aggregation happens a
+    shard at a time, avoiding materializing the much larger full
+    origin-destination panel. By default only the eight busiest origins are
+    returned, which keeps hierarchical examples quick; pass ``None`` for all
+    stations.
+
+    Parameters
+    ----------
+    num_series
+        Number of busiest origin stations to retain, or ``None`` for all.
+
+    Returns
+    -------
+    xarray.DataArray
+        Log weekly counts with dims ``("time", "series")`` and station names
+        on the ``"series"`` coordinate.
+    """
+    hourly_shards = []
+    stations = None
+    for path in _bart_file_paths():
+        with np.load(path, allow_pickle=True) as shard:
+            if stations is None:
+                stations = np.asarray(shard["stations"], dtype=str)
+            hourly_shards.append(shard["counts"].sum(axis=2, dtype=np.int64))
+
+    hourly = np.concatenate(hourly_shards, axis=0)
+    num_weeks = hourly.shape[0] // _HOURS_PER_WEEK
+    weekly = hourly[: num_weeks * _HOURS_PER_WEEK]
+    values = weekly.reshape(num_weeks, _HOURS_PER_WEEK, -1).sum(axis=1)
+    if num_series is not None:
+        if num_series < 1:
+            msg = f"num_series must be positive or None, got {num_series}"
+            raise ValueError(msg)
+        order = np.argsort(values.sum(axis=0))[::-1][:num_series]
+        values = values[:, order]
+        stations = stations[order]
+    return xr.DataArray(
+        np.log1p(values),
+        dims=(TIME_DIM, "series"),
+        coords={TIME_DIM: np.arange(values.shape[0]), "series": stations},
         name="log_rides",
     )
 

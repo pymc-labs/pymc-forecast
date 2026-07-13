@@ -1,5 +1,8 @@
 # pymc_forecast
 
+[![CI](https://github.com/pymc-labs/pymc_forecast/actions/workflows/ci.yml/badge.svg)](https://github.com/pymc-labs/pymc_forecast/actions/workflows/ci.yml)
+[![Docs](https://github.com/pymc-labs/pymc_forecast/actions/workflows/docs.yml/badge.svg)](https://pymc-labs.github.io/pymc_forecast/)
+
 Bayesian time-series forecasting with [PyMC](https://www.pymc.io): you write the
 generative model; the package handles the train/forecast plumbing, inference,
 backtesting, and evaluation.
@@ -11,6 +14,9 @@ rather than a 1:1 translation.
 > **Status: early development.** The design and roadmap live in
 > [PLAN.md](PLAN.md) and the
 > [issue tracker](https://github.com/pymc-labs/pymc_forecast/issues).
+
+**Documentation:** <https://pymc-labs.github.io/pymc_forecast/> — API reference and
+executed example notebooks (univariate, hierarchical, covariates, state-space).
 
 ## Quickstart
 
@@ -87,6 +93,14 @@ Requires Python >= 3.11 and [uv](https://docs.astral.sh/uv/):
 uv sync --all-extras
 uv run pytest
 uv run ruff check .
+```
+
+To build the documentation (the example notebooks are committed fully executed;
+CI re-executes them with reduced sampling settings):
+
+```bash
+uv sync --all-extras --group docs
+uv run sphinx-build -b html docs docs/_build/html
 ```
 
 ## License

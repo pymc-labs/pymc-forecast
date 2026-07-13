@@ -40,6 +40,18 @@ dev = [
     "ruff",
     "pre-commit",
 ]
+docs = [
+    "sphinx>=8",
+    "pydata-sphinx-theme>=0.16",
+    "myst-nb>=1.1",
+    "sphinx-copybutton",
+]
+notebooks = [
+    "matplotlib",
+    "pandas",
+    "ipykernel",
+    "nbconvert",
+]
 
 [build-system]
 requires = ["hatchling"]
