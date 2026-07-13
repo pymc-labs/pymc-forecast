@@ -1,7 +1,36 @@
 import numpy as np
 import pandas as pd
 
-from pymc_forecast.datasets import load_victoria_electricity
+from pymc_forecast.datasets import load_bart_od, load_bart_weekly, load_victoria_electricity
+
+
+def test_bart_loaders(monkeypatch, tmp_path):
+    stations = np.array(["A", "B"])
+    start_date = np.array([np.datetime64("2011-01-01T00:00")])
+    paths = []
+    for index, value in enumerate((1, 2)):
+        path = tmp_path / f"bart_{index}.npz"
+        np.savez(
+            path,
+            stations=stations,
+            start_date=start_date,
+            counts=np.full((7 * 24, 2, 2), value, dtype=np.int16),
+        )
+        paths.append(path)
+    monkeypatch.setattr("pymc_forecast.datasets._bart_file_paths", lambda: paths)
+
+    od = load_bart_od()
+    assert od.dims == ("time", "origin", "destination")
+    assert od.shape == (2 * 7 * 24, 2, 2)
+    np.testing.assert_array_equal(od["origin"], stations)
+    assert od["time"].values[0] == np.datetime64("2011-01-01T00:00")
+
+    rides = load_bart_weekly()
+    assert rides.dims == ("time",)
+    assert rides.sizes["time"] == 2
+    np.testing.assert_array_equal(rides["time"], np.arange(2))
+    np.testing.assert_allclose(rides, np.log([7 * 24 * 4, 7 * 24 * 8]))
+    assert rides.name == "log_rides"
 
 
 def test_victoria_electricity():
