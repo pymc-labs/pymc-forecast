@@ -59,7 +59,7 @@ from pymc_forecast.prediction import (
 )
 from pymc_forecast.statespace import StatespaceForecaster, StatespaceModel
 
-__version__ = "0.0.1.dev0"
+__version__ = "0.0.1"
 
 __all__ = [
     "DEFAULT_METRICS",
