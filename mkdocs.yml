@@ -1,0 +1,62 @@
+site_name: pymc_forecast
+site_description: Bayesian time-series forecasting with PyMC
+site_url: https://pymc-labs.github.io/pymc_forecast/
+repo_url: https://github.com/pymc-labs/pymc_forecast
+repo_name: pymc-labs/pymc_forecast
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.sections
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Examples:
+      - Overview: examples/index.md
+      - BART weekly ridership: examples/forecasting_univariate.ipynb
+      - Hierarchical BART panel: examples/forecasting_hierarchical.ipynb
+      - Victoria electricity: examples/victoria_electricity.ipynb
+      - Exponential smoothing: examples/exponential_smoothing_state_space.ipynb
+      - Scan vs statespace: examples/scan_vs_statespace_local_level.ipynb
+  - API reference: api.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: numpy
+            show_source: true
+            show_root_heading: true
+            members_order: source
+  - mkdocs-jupyter:
+      execute: false
+      include_source: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+
+strict: true

@@ -1,5 +1,8 @@
 # pymc_forecast
 
+[![CI](https://github.com/pymc-labs/pymc_forecast/actions/workflows/ci.yml/badge.svg)](https://github.com/pymc-labs/pymc_forecast/actions/workflows/ci.yml)
+[![Docs](https://github.com/pymc-labs/pymc_forecast/actions/workflows/docs.yml/badge.svg)](https://pymc-labs.github.io/pymc_forecast/)
+
 Bayesian time-series forecasting with [PyMC](https://www.pymc.io): you write the
 generative model; the package handles the train/forecast plumbing, inference,
 backtesting, and evaluation.
@@ -62,6 +65,10 @@ metrics calls apply, with the Kalman filter marginalizing the latent states inst
 of sampling them (see `docs/examples/scan_vs_statespace_local_level.ipynb`).
 The pymc-extras integrations (`PathfinderForecaster`, `StatespaceForecaster`) are an
 optional extra: install with `pip install 'pymc-forecast[extras]'`.
+
+The [documentation](https://pymc-labs.github.io/pymc_forecast/) includes the
+API reference and end-to-end notebooks for BART ridership, hierarchical panel
+forecasting, Victoria electricity demand, and state-space models.
 
 ## Design principles
 

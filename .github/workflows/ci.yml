@@ -27,3 +27,20 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --all-extras
       - run: uv run pytest
+
+  notebooks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+          enable-cache: true
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pymc_forecast
+          key: bart-example-data-v1
+      - run: uv sync --all-extras --group docs
+      - run: uv run python scripts/run_notebook_smoke_tests.py
+        env:
+          MPLBACKEND: Agg

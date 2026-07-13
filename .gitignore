@@ -7,12 +7,14 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+site/
 .venv/
 uv.lock
 
 # Tooling caches
 .pytest_cache/
 .ruff_cache/
+.cache/
 .coverage
 htmlcov/
 

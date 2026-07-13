@@ -40,6 +40,14 @@ dev = [
     "ruff",
     "pre-commit",
 ]
+docs = [
+    "matplotlib",
+    "mkdocs-jupyter",
+    "mkdocs-material",
+    "mkdocstrings[python]",
+    "nbclient",
+    "nbformat",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -1,7 +1,12 @@
 import numpy as np
 import pandas as pd
 
-from pymc_forecast.datasets import load_bart_od, load_bart_weekly, load_victoria_electricity
+from pymc_forecast.datasets import (
+    load_bart_od,
+    load_bart_weekly,
+    load_bart_weekly_by_origin,
+    load_victoria_electricity,
+)
 
 
 def test_bart_loaders(monkeypatch, tmp_path):
@@ -31,6 +36,28 @@ def test_bart_loaders(monkeypatch, tmp_path):
     np.testing.assert_array_equal(rides["time"], np.arange(2))
     np.testing.assert_allclose(rides, np.log([7 * 24 * 4, 7 * 24 * 8]))
     assert rides.name == "log_rides"
+
+    panel = load_bart_weekly_by_origin(num_series=1)
+    assert panel.dims == ("time", "series")
+    assert panel.shape == (2, 1)
+    np.testing.assert_array_equal(panel["series"], ["B"])
+    np.testing.assert_allclose(panel[:, 0], np.log1p([7 * 24 * 2, 7 * 24 * 4]))
+
+    all_stations = load_bart_weekly_by_origin(num_series=None)
+    np.testing.assert_array_equal(all_stations["series"], stations)
+
+
+def test_bart_weekly_by_origin_rejects_invalid_series_count(monkeypatch, tmp_path):
+    path = tmp_path / "bart.npz"
+    np.savez(
+        path,
+        stations=np.array(["A"]),
+        start_date=np.array([np.datetime64("2011-01-01T00:00")]),
+        counts=np.ones((7 * 24, 1, 1), dtype=np.int16),
+    )
+    monkeypatch.setattr("pymc_forecast.datasets._bart_file_paths", lambda: [path])
+    with np.testing.assert_raises_regex(ValueError, "positive or None"):
+        load_bart_weekly_by_origin(num_series=0)
 
 
 def test_victoria_electricity():
