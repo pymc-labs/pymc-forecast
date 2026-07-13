@@ -54,6 +54,14 @@ For models with real covariates, pass full-horizon `covariates` to `.forecast()`
 instead of `horizon=`. See `markov_time_series` for state-space latents and
 `predict_mvn` for observation noise correlated across time.
 
+Linear-Gaussian models from `pymc-extras.statespace` use their own build and
+forecast lifecycle. `StatespaceForecaster` adapts it to that same interface,
+including `backtest()` and the dim-aware metrics. A builder returns a fresh
+`(statespace_model, pymc_model)` pair for each fit; see
+[`docs/examples/statespace_forecaster.ipynb`](docs/examples/statespace_forecaster.ipynb)
+for a local-level comparison with the scan-based model. Install these adapters
+with `pip install 'pymc-forecast[extras]'`.
+
 ## Design principles
 
 - **One model trains and forecasts.** In-sample time latents are fitted; the
