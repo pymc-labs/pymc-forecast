@@ -38,7 +38,7 @@ from pymc_forecast.data import (
     validate_alignment,
 )
 from pymc_forecast.exceptions import AlignmentError, HorizonError, OptionalDependencyError
-from pymc_forecast.prediction import thin_draws
+from pymc_forecast.forecaster import HMCForecaster
 
 __all__ = ["StatespaceForecaster", "StatespaceModel"]
 
@@ -135,13 +135,15 @@ def _predictive_dataset(result) -> xr.Dataset:
     return result.to_dataset() if hasattr(result, "to_dataset") else result
 
 
-class StatespaceForecaster:
+class StatespaceForecaster(HMCForecaster):
     """Fit and forecast a pymc-extras statespace model behind the forecaster protocol.
 
-    Satisfies the same interface as the :mod:`~pymc_forecast.forecaster`
-    classes — fit on construction, :meth:`draw_posterior`, :meth:`forecast`
-    returning a labeled ``predictions`` group, :meth:`predict_in_sample` — so
-    it drops into :func:`~pymc_forecast.evaluate.backtest` via
+    An :class:`~pymc_forecast.forecaster.HMCForecaster` whose training model
+    is built through the statespace lifecycle instead of
+    :func:`~pymc_forecast.model.build_model`: fit on construction with NUTS,
+    :meth:`draw_posterior`, :meth:`forecast` returning a labeled
+    ``predictions`` group, :meth:`predict_in_sample` — so it drops into
+    :func:`~pymc_forecast.evaluate.backtest` via
     ``forecaster_cls=StatespaceForecaster``.
 
     pymc-extras is imported lazily, so constructing this class is the opt-in
@@ -168,6 +170,9 @@ class StatespaceForecaster:
         Seed for the fit.
     sample_kwargs
         Extra keyword arguments for ``pm.sample``.
+    build_kwargs
+        Extra keyword arguments for ``build_statespace_graph``, such as
+        ``mvn_method`` for the likelihood decomposition.
     forecast_kwargs
         Extra keyword arguments for ``PyMCStateSpace.forecast``, such as
         ``filter_output`` or ``mvn_method``. Horizon, scenario, seed,
@@ -196,6 +201,7 @@ class StatespaceForecaster:
         nuts_sampler: str = "pymc",
         random_seed=None,
         sample_kwargs: Mapping | None = None,
+        build_kwargs: Mapping | None = None,
         forecast_kwargs: Mapping | None = None,
     ) -> None:
         try:
@@ -203,29 +209,39 @@ class StatespaceForecaster:
         except ImportError as err:
             raise OptionalDependencyError("pymc-extras", "extras", "StatespaceForecaster") from err
 
-        self.model_fn = model_fn
-        self._data = as_dataarray(data, role="data")
-        if self._data.ndim > 2:
-            msg = (
-                "pymc-extras statespace models take one- or two-dimensional "
-                f"data, got dims {self._data.dims}"
-            )
-            raise AlignmentError(msg)
-        if covariates is None:
-            cov = null_covariates(self._data[TIME_DIM].values)
-        else:
-            cov = as_dataarray(covariates, role="covariates")
-            validate_alignment(self._data, cov)
-            cov = cov.isel({TIME_DIM: slice(None, self._data.sizes[TIME_DIM])})
-        self._covariates = cov
+        self._build_kwargs = dict(build_kwargs or {})
         self._forecast_kwargs = dict(forecast_kwargs or {})
         reserved = {"start", "periods", "end", "scenario", "random_seed", "verbose", "progressbar"}
         overlap = reserved.intersection(self._forecast_kwargs)
         if overlap:
             msg = f"forecast_kwargs cannot override adapter-managed arguments: {sorted(overlap)}"
             raise ValueError(msg)
+        super().__init__(
+            model_fn,
+            data,
+            covariates,
+            draws=draws,
+            tune=tune,
+            chains=chains,
+            nuts_sampler=nuts_sampler,
+            random_seed=random_seed,
+            sample_kwargs=sample_kwargs,
+        )
 
-        self.ss_mod = model_fn.statespace(self._data, self._covariates)
+    def _build_model(self) -> pm.Model:
+        """Drive the statespace lifecycle: components, priors, Kalman graph.
+
+        Validation happens here — after input normalization, before the
+        (expensive) fit.
+        """
+        if self._data.ndim > 2:
+            msg = (
+                "pymc-extras statespace models take one- or two-dimensional "
+                f"data, got dims {self._data.dims}"
+            )
+            raise AlignmentError(msg)
+        validate_alignment(self._data, self._covariates)
+        self.ss_mod = self.model_fn.statespace(self._data, self._covariates)
         data_width = 1 if self._data.ndim == 1 else self._data.sizes[self._series_dim]
         if self.ss_mod.k_endog != data_width:
             msg = (
@@ -233,33 +249,20 @@ class StatespaceForecaster:
                 f"k_endog={self.ss_mod.k_endog}, data width={data_width}"
             )
             raise AlignmentError(msg)
-        with pm.Model(coords=self.ss_mod.coords) as self.model:
-            model_fn.priors(self.ss_mod, self._data, self._covariates)
+        with pm.Model(coords=self.ss_mod.coords) as model:
+            self.model_fn.priors(self.ss_mod, self._data, self._covariates)
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message=_NO_TIME_INDEX_MESSAGE)
-                self.ss_mod.build_statespace_graph(_observed_frame(self._data))
-
-        sample_kwargs = dict(sample_kwargs or {})
-        self.idata = pm.sample(
-            draws=draws,
-            tune=tune,
-            chains=chains,
-            nuts_sampler=nuts_sampler,
-            model=self.model,
-            random_seed=random_seed,
-            progressbar=sample_kwargs.pop("progressbar", False),
-            **sample_kwargs,
-        )
+                self.ss_mod.build_statespace_graph(
+                    _observed_frame(self._data), **self._build_kwargs
+                )
+        return model
 
     @property
     def _series_dim(self) -> str | None:
         """The data's non-time dim, or ``None`` for a univariate series."""
         extra_dims = [d for d in self._data.dims if d != TIME_DIM]
         return extra_dims[0] if extra_dims else None
-
-    def draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
-        """Subsample ``num_samples`` draws from the MCMC posterior."""
-        return thin_draws(self.idata, num_samples, random_seed)
 
     def _relabel(self, da: xr.DataArray, time_dim: str, time_coords) -> xr.DataArray:
         """Stamp real coords on a statespace output: rename its positional

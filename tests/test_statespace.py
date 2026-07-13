@@ -10,6 +10,7 @@ from example_models import LocalLevelRegressionStatespace, LocalLevelStatespace
 
 from pymc_forecast.evaluate import backtest
 from pymc_forecast.exceptions import AlignmentError, HorizonError, OptionalDependencyError
+from pymc_forecast.forecaster import HMCForecaster
 from pymc_forecast.statespace import StatespaceForecaster
 
 SEED = 987
@@ -100,6 +101,10 @@ class TestForecast:
         posterior = forecaster.draw_posterior(17, random_seed=SEED)
         assert posterior.sizes["chain"] == 1 and posterior.sizes["draw"] == 17
 
+    def test_is_an_hmc_forecaster(self, forecaster):
+        # not just duck-typed: fit and draw_posterior are inherited
+        assert isinstance(forecaster, HMCForecaster)
+
 
 def make_regression_data(t_obs=20, horizon=4, seed=SEED):
     """(data, covariates_full) pair: local level plus one exogenous feature."""
@@ -127,8 +132,10 @@ def regression_forecaster():
         data,
         cov,
         random_seed=SEED,
-        # svd handles the singular forecast covariance (regression states carry
-        # no innovations); also exercises the forecast_kwargs passthrough
+        # cholesky is fine for the likelihood graph; the forecast covariance is
+        # singular (regression states carry no innovations) so it needs svd.
+        # Together these exercise the build_kwargs/forecast_kwargs passthroughs.
+        build_kwargs={"mvn_method": "cholesky"},
         forecast_kwargs={"mvn_method": "svd"},
         **FAST,
     )
