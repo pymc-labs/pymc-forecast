@@ -1,5 +1,8 @@
 # pymc_forecast
 
+[![CI](https://github.com/pymc-labs/pymc_forecast/actions/workflows/ci.yml/badge.svg)](https://github.com/pymc-labs/pymc_forecast/actions/workflows/ci.yml)
+[![Docs](https://github.com/pymc-labs/pymc_forecast/actions/workflows/docs.yml/badge.svg)](https://pymc-labs.github.io/pymc_forecast/)
+
 Bayesian time-series forecasting with [PyMC](https://www.pymc.io): you write the
 generative model; the package handles the train/forecast plumbing, inference,
 backtesting, and evaluation.

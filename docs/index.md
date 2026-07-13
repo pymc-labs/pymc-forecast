@@ -21,56 +21,29 @@ pip install pymc-forecast            # core: PyMC + ArviZ
 pip install 'pymc-forecast[extras]'  # + pymc-extras (Pathfinder, statespace)
 ```
 
-## Quickstart
-
-Write a model with one {func}`~pymc_forecast.predict` call, fit it, and forecast:
+## At a glance
 
 ```python
-import numpy as np, pandas as pd, pymc as pm, pytensor.tensor as pt
-from pymc_forecast import Forecaster, backtest, evaluate_forecast, predict, time_series
+import pymc as pm, pytensor.tensor as pt
+from pymc_forecast import Forecaster, predict, time_series
 
-# a trending weekly series; hold out the last 8 weeks
-dates = pd.date_range("2024-01-07", periods=60, freq="W")
-y = pd.Series(np.cumsum(np.random.default_rng(0).normal(0.2, 1.0, 60)) + 10, index=dates)
-train, test = y.iloc[:52], y.iloc[52:]
-
-def model(h, covariates):
-    # a per-step drift latent; time_series adds the matching `_future` latent
+def local_level(h, covariates):
     drift = time_series(h, "drift", lambda name, dims: pm.Normal(name, 0.0, 0.5, dims=dims))
     sigma = pm.HalfNormal("sigma", 1.0)
     predict(
         h,
         lambda name, mu, dims, obs: pm.Normal(name, mu, sigma, dims=dims, observed=obs),
-        pt.cumsum(drift),                       # local-linear trend
+        pt.cumsum(drift),
     )
 
-fc = Forecaster(model, train, num_steps=5_000, random_seed=0)   # ADVI
-idata = fc.forecast(horizon=8, num_samples=500, random_seed=0)
-forecast = idata["predictions"]["forecast"]     # dims: (chain, draw, time_future)
-
-# score against the held-out weeks (aligned by dim name, not axis position)
-truth = test.to_xarray().rename({"index": "time_future"})
-print(evaluate_forecast(forecast, truth))       # {'mae': ..., 'rmse': ..., 'crps': ..., 'coverage': ...}
-
-# rolling-origin backtest over the whole series
-results = backtest(y, None, model, min_train_window=48, test_window=4, stride=4,
-                   num_samples=200, forecaster_options={"num_steps": 3_000}, random_seed=0)
+fc = Forecaster(local_level, train, num_steps=5_000)      # ADVI
+idata = fc.forecast(horizon=8, num_samples=500)
+forecast = idata["predictions"]["forecast"]               # dims: (chain, draw, time_future)
 ```
 
-Swap {class}`~pymc_forecast.Forecaster` for {class}`~pymc_forecast.HMCForecaster`
-(NUTS, with `nuts_sampler="nutpie"/"numpyro"/...`) or
-{class}`~pymc_forecast.PathfinderForecaster` (pymc-extras) — the fit/forecast
-interface is identical. For models with real covariates, pass full-horizon
-`covariates` to `.forecast()` instead of `horizon=`. See
-{func}`~pymc_forecast.markov_time_series` for state-space latents and
-{func}`~pymc_forecast.predict_mvn` for observation noise correlated across time.
-
-[pymc-extras statespace](https://github.com/pymc-devs/pymc-extras) structural models
-(level/trend, seasonality, SARIMAX, ...) are first-class citizens too: define one as a
-{class}`~pymc_forecast.StatespaceModel` and fit it with
-{class}`~pymc_forecast.StatespaceForecaster` — the same `forecast` (including
-exogenous-regression covariates), `predict_in_sample`, `backtest`, and metrics calls
-apply, with the Kalman filter marginalizing the latent states instead of sampling them.
+**[Start with the full workflow →](quickstart.md)** ·
+**[Browse the examples →](examples/index.md)** ·
+**[API reference →](api/index.md)**
 
 ## Design principles
 
@@ -92,6 +65,7 @@ apply, with the Kalman filter marginalizing the latent states instead of samplin
 :hidden:
 :maxdepth: 2
 
+quickstart
 examples/index
 api/index
 ```
