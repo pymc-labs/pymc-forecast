@@ -6,6 +6,7 @@ import pytensor.tensor as pt
 import xarray as xr
 
 from pymc_forecast.model import ForecastingModel, Horizon, predict, time_series
+from pymc_forecast.statespace import StatespaceModel
 
 SEED = 20260709
 
@@ -74,6 +75,32 @@ def poisson_model(h: Horizon, covariates: xr.DataArray) -> None:
         lambda name, e, dims, observed: pm.Poisson(name, pt.exp(e), dims=dims, observed=observed),
         eta,
     )
+
+
+class LocalLevelStatespace(StatespaceModel):
+    """pymc-extras local linear trend + measurement error.
+
+    Priors are derived generically from ``param_info`` (constraint-driven), so
+    the model stays valid across pymc-extras component/parameter renames.
+    """
+
+    def statespace(self, covariates):
+        from pymc_extras.statespace import structural as st
+
+        trend = st.LevelTrend(order=2, innovations_order=[0, 1])
+        return (trend + st.MeasurementError()).build(verbose=False)
+
+    def priors(self, ss_mod, covariates):
+        for name, info in ss_mod.param_info.items():
+            dims = info["dims"]
+            size = {"dims": dims} if dims else {"shape": info["shape"]}
+            if info["constraints"] == "Positive semi-definite":
+                diag = pm.Gamma(f"{name}_diag", alpha=2, beta=5, dims=dims[0])
+                pm.Deterministic(name, pt.diag(diag), dims=dims)
+            elif info["constraints"] == "Positive":
+                pm.Gamma(name, alpha=2, beta=10, **size)
+            else:
+                pm.Normal(name, 0.0, 1.0, **size)
 
 
 def make_trend_data(t_obs: int = 30, horizon: int = 5, seed: int = SEED):
