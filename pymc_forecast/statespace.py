@@ -23,7 +23,7 @@ predictions — exactly like the core forecasters.
 
 import abc
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 import pymc as pm
@@ -37,7 +37,7 @@ from pymc_forecast.data import (
     null_covariates,
     validate_alignment,
 )
-from pymc_forecast.exceptions import HorizonError, OptionalDependencyError
+from pymc_forecast.exceptions import AlignmentError, HorizonError, OptionalDependencyError
 from pymc_forecast.prediction import thin_draws
 
 __all__ = ["StatespaceForecaster", "StatespaceModel"]
@@ -62,24 +62,33 @@ class StatespaceModel(abc.ABC):
         from pymc_extras.statespace import structural as st
 
         class LocalLinearTrend(StatespaceModel):
-            def statespace(self, covariates):
+            def statespace(self, data, covariates):
                 trend = st.LevelTrend(order=2, innovations_order=[0, 1])
                 return (trend + st.MeasurementError()).build(verbose=False)
 
-            def priors(self, ss_mod, covariates):
+            def priors(self, ss_mod, data, covariates):
                 P0_diag = pm.Gamma("P0_diag", alpha=2, beta=5, dims="state")
                 pm.Deterministic("P0", pt.diag(P0_diag), dims=("state", "state_aux"))
-                pm.Normal("initial_level_trend", 0, 1, dims="state_level_trend")
+                pm.Normal("initial_level_trend", float(data[0]), 1, dims="state_level_trend")
                 pm.Gamma("sigma_level_trend", alpha=2, beta=10, dims="shock_level_trend")
                 pm.Gamma("sigma_MeasurementError", alpha=2, beta=10)
+
+    Both phases receive the normalized training ``data`` and ``covariates`` as
+    labeled DataArrays — ``statespace`` so the component graph can be sized
+    from them (series count, regression features), ``priors`` so priors can be
+    informed by them (as with ``initial_level_trend`` above). A model with a
+    ``st.Regression`` component registers its feature matrix with
+    ``pm.Data(name, ...)`` inside ``priors``, where ``name`` is the entry in
+    ``ss_mod.data_names``; at forecast time the adapter feeds the future
+    covariate values through as the scenario.
     """
 
     @abc.abstractmethod
-    def statespace(self, covariates: xr.DataArray):
+    def statespace(self, data: xr.DataArray, covariates: xr.DataArray):
         """Build and return the ``PyMCStateSpace`` (component sum + ``.build()``)."""
 
     @abc.abstractmethod
-    def priors(self, ss_mod, covariates: xr.DataArray) -> None:
+    def priors(self, ss_mod, data: xr.DataArray, covariates: xr.DataArray) -> None:
         """Declare the parameter priors listed by ``ss_mod.param_info``.
 
         Called inside a ``pm.Model`` whose coords are ``ss_mod.coords``; the
@@ -102,9 +111,14 @@ def _observed_frame(data: xr.DataArray):
     return pd.DataFrame(values)
 
 
-def _posterior_tree(posterior: xr.Dataset) -> xr.DataTree:
-    """Wrap a posterior ``Dataset`` in the idata shape statespace methods take."""
-    return xr.DataTree.from_dict({"posterior": posterior})
+def _posterior_like(fit_result, posterior: xr.Dataset):
+    """Wrap a thinned posterior ``Dataset`` in the same container type as the
+    fit result (``DataTree`` or ``arviz.InferenceData``, depending on the
+    pymc/arviz generation), which is by construction the idata flavor the
+    installed statespace methods accept."""
+    if isinstance(fit_result, xr.DataTree):
+        return xr.DataTree.from_dict({"posterior": posterior})
+    return type(fit_result)(posterior=posterior)
 
 
 def _predictive_dataset(result) -> xr.Dataset:
@@ -154,6 +168,11 @@ class StatespaceForecaster:
         Seed for the fit.
     sample_kwargs
         Extra keyword arguments for ``pm.sample``.
+    forecast_kwargs
+        Extra keyword arguments for ``PyMCStateSpace.forecast``, such as
+        ``filter_output`` or ``mvn_method``. Horizon, scenario, seed,
+        verbosity, and progress are managed by the adapter and cannot be
+        overridden here.
 
     Attributes
     ----------
@@ -177,6 +196,7 @@ class StatespaceForecaster:
         nuts_sampler: str = "pymc",
         random_seed=None,
         sample_kwargs: Mapping | None = None,
+        forecast_kwargs: Mapping | None = None,
     ) -> None:
         try:
             import pymc_extras.statespace  # noqa: F401
@@ -185,16 +205,36 @@ class StatespaceForecaster:
 
         self.model_fn = model_fn
         self._data = as_dataarray(data, role="data")
+        if self._data.ndim > 2:
+            msg = (
+                "pymc-extras statespace models take one- or two-dimensional "
+                f"data, got dims {self._data.dims}"
+            )
+            raise AlignmentError(msg)
         if covariates is None:
             cov = null_covariates(self._data[TIME_DIM].values)
         else:
             cov = as_dataarray(covariates, role="covariates")
+            validate_alignment(self._data, cov)
             cov = cov.isel({TIME_DIM: slice(None, self._data.sizes[TIME_DIM])})
         self._covariates = cov
+        self._forecast_kwargs = dict(forecast_kwargs or {})
+        reserved = {"start", "periods", "end", "scenario", "random_seed", "verbose", "progressbar"}
+        overlap = reserved.intersection(self._forecast_kwargs)
+        if overlap:
+            msg = f"forecast_kwargs cannot override adapter-managed arguments: {sorted(overlap)}"
+            raise ValueError(msg)
 
-        self.ss_mod = model_fn.statespace(self._covariates)
+        self.ss_mod = model_fn.statespace(self._data, self._covariates)
+        data_width = 1 if self._data.ndim == 1 else self._data.sizes[self._series_dim]
+        if self.ss_mod.k_endog != data_width:
+            msg = (
+                "statespace observed width does not match the training data: "
+                f"k_endog={self.ss_mod.k_endog}, data width={data_width}"
+            )
+            raise AlignmentError(msg)
         with pm.Model(coords=self.ss_mod.coords) as self.model:
-            model_fn.priors(self.ss_mod, self._covariates)
+            model_fn.priors(self.ss_mod, self._data, self._covariates)
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message=_NO_TIME_INDEX_MESSAGE)
                 self.ss_mod.build_statespace_graph(_observed_frame(self._data))
@@ -211,6 +251,12 @@ class StatespaceForecaster:
             **sample_kwargs,
         )
 
+    @property
+    def _series_dim(self) -> str | None:
+        """The data's non-time dim, or ``None`` for a univariate series."""
+        extra_dims = [d for d in self._data.dims if d != TIME_DIM]
+        return extra_dims[0] if extra_dims else None
+
     def draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
         """Subsample ``num_samples`` draws from the MCMC posterior."""
         return thin_draws(self.idata, num_samples, random_seed)
@@ -222,16 +268,41 @@ class StatespaceForecaster:
         if "time" != time_dim:
             da = da.rename({"time": time_dim})
         da = da.assign_coords({time_dim: np.asarray(time_coords)})
-        extra_dims = [d for d in self._data.dims if d != TIME_DIM]
+        series_dim = self._series_dim
         if OBSERVED_STATE_DIM in da.dims:
-            if not extra_dims:
+            if series_dim is None:
                 da = da.squeeze(OBSERVED_STATE_DIM, drop=True)
             else:
-                series_dim = extra_dims[0]
                 da = da.rename({OBSERVED_STATE_DIM: series_dim})
                 da = da.assign_coords({series_dim: self._data[series_dim].values})
         sample_dims = [d for d in ("chain", "draw") if d in da.dims]
         return da.transpose(*sample_dims, time_dim, ...)
+
+    def _scenario(self, future_covariates: xr.DataArray):
+        """Future exogenous values for ``PyMCStateSpace.forecast(scenario=...)``.
+
+        Returns ``None`` for models without exogenous data. A single
+        registered data variable (one ``st.Regression`` component) is fed the
+        future slice of the covariate matrix.
+        """
+        data_names = tuple(self.ss_mod.data_names)
+        if not data_names:
+            return None
+        if len(data_names) > 1:
+            msg = (
+                "one covariate DataArray cannot populate a statespace model "
+                f"with multiple exogenous inputs {data_names}; combine them "
+                "into one Regression component"
+            )
+            raise NotImplementedError(msg)
+        feature_dims = [d for d in future_covariates.dims if d != TIME_DIM]
+        if len(feature_dims) != 1 or future_covariates.sizes[feature_dims[0]] == 0:
+            msg = (
+                f"the statespace model needs future values for {data_names[0]!r}: "
+                "pass full-horizon covariates instead of horizon="
+            )
+            raise AlignmentError(msg)
+        return np.asarray(future_covariates.transpose(TIME_DIM, ...).values)
 
     def forecast(
         self,
@@ -239,19 +310,22 @@ class StatespaceForecaster:
         num_samples: int = 100,
         *,
         horizon: int | None = None,
+        var_names: Sequence[str] | None = None,
         random_seed=None,
         progressbar: bool = False,
     ) -> xr.DataTree:
         """Sample forecasts beyond the training window.
 
         Provide the horizon in one of two ways: pass ``covariates`` spanning
-        the training window plus the forecast steps, or pass ``horizon=N`` to
-        forecast ``N`` steps past the training data (its time coord is
-        extended at the inferred spacing).
+        the training window plus the forecast steps, or — for a model without
+        exogenous inputs — pass ``horizon=N`` to forecast ``N`` steps past the
+        training data (its time coord is extended at the inferred spacing).
 
         The forecast draws the terminal state from its smoothed posterior and
         iterates the statespace forward — the Kalman analogue of the core
         mechanism of seeding ``*_future`` latents from the in-sample state.
+        For a model with a ``st.Regression`` component, the future slice of
+        the covariates is fed through as the scenario.
 
         Parameters
         ----------
@@ -264,6 +338,9 @@ class StatespaceForecaster:
         horizon
             Number of steps to forecast past the training data. Mutually
             exclusive with ``covariates``.
+        var_names
+            Subset of prediction variables to keep (``"forecast"``,
+            ``"forecast_latent"``). Default: both.
         random_seed, progressbar
             Passed through to ``PyMCStateSpace.forecast``.
 
@@ -280,11 +357,12 @@ class StatespaceForecaster:
         t_obs = self._data.sizes[TIME_DIM]
         if horizon is not None:
             full_index = extend_time_index(self._data[TIME_DIM].values, horizon)
-            future_coords = np.asarray(full_index)[t_obs:]
+            cov = null_covariates(np.asarray(full_index))
         else:
             cov = as_dataarray(covariates, role="covariates")
             validate_alignment(self._data, cov)
-            future_coords = cov[TIME_DIM].values[t_obs:]
+        future_covariates = cov.isel({TIME_DIM: slice(t_obs, None)})
+        future_coords = future_covariates[TIME_DIM].values
         if len(future_coords) == 0:
             msg = (
                 "no forecast horizon: pass covariates longer than the data "
@@ -296,12 +374,14 @@ class StatespaceForecaster:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message=_NO_TIME_INDEX_MESSAGE)
             result = self.ss_mod.forecast(
-                _posterior_tree(posterior),
+                _posterior_like(self.idata, posterior),
                 start=t_obs - 1,
                 periods=len(future_coords),
+                scenario=self._scenario(future_covariates),
                 random_seed=random_seed,
                 progressbar=progressbar,
                 verbose=False,
+                **self._forecast_kwargs,
             )
         ds = _predictive_dataset(result)
         predictions = xr.Dataset(
@@ -310,6 +390,13 @@ class StatespaceForecaster:
                 "forecast_latent": self._relabel(ds["forecast_latent"], FUTURE_DIM, future_coords),
             }
         )
+        if var_names is not None:
+            names = list(var_names)
+            unknown = set(names).difference(predictions.data_vars)
+            if unknown:
+                msg = f"unknown statespace prediction variables: {sorted(unknown)}"
+                raise KeyError(msg)
+            predictions = predictions[names]
         return xr.DataTree.from_dict({"predictions": predictions})
 
     def predict_in_sample(
@@ -335,7 +422,7 @@ class StatespaceForecaster:
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message=_NO_TIME_INDEX_MESSAGE)
             result = self.ss_mod.sample_conditional_posterior(
-                _posterior_tree(posterior),
+                _posterior_like(self.idata, posterior),
                 random_seed=random_seed,
                 progressbar=progressbar,
             )

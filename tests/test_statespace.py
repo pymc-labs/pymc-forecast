@@ -6,10 +6,10 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
-from example_models import LocalLevelStatespace
+from example_models import LocalLevelRegressionStatespace, LocalLevelStatespace
 
 from pymc_forecast.evaluate import backtest
-from pymc_forecast.exceptions import HorizonError, OptionalDependencyError
+from pymc_forecast.exceptions import AlignmentError, HorizonError, OptionalDependencyError
 from pymc_forecast.statespace import StatespaceForecaster
 
 SEED = 987
@@ -88,9 +88,96 @@ class TestForecast:
         with pytest.raises(HorizonError, match="no forecast horizon"):
             forecaster.forecast(cov.isel(time=slice(None, data.sizes["time"])))
 
+    def test_var_names_selects_subset(self, forecaster):
+        tree = forecaster.forecast(horizon=2, num_samples=10, var_names=["forecast"])
+        assert list(tree["predictions"].data_vars) == ["forecast"]
+
+    def test_unknown_var_names_raise(self, forecaster):
+        with pytest.raises(KeyError, match="unknown statespace prediction"):
+            forecaster.forecast(horizon=2, num_samples=10, var_names=["nope"])
+
     def test_draw_posterior_protocol(self, forecaster):
         posterior = forecaster.draw_posterior(17, random_seed=SEED)
         assert posterior.sizes["chain"] == 1 and posterior.sizes["draw"] == 17
+
+
+def make_regression_data(t_obs=20, horizon=4, seed=SEED):
+    """(data, covariates_full) pair: local level plus one exogenous feature."""
+    rng = np.random.default_rng(seed)
+    time = np.arange(t_obs + horizon)
+    feature = np.linspace(-1.0, 1.0, time.size)
+    covariates = xr.DataArray(
+        feature[:, None],
+        dims=("time", "covariate"),
+        coords={"time": time, "covariate": ["x"]},
+    )
+    data = xr.DataArray(
+        np.cumsum(rng.normal(0.0, 0.05, t_obs)) + 1.5 * feature[:t_obs],
+        dims=("time",),
+        coords={"time": time[:t_obs]},
+    )
+    return data, covariates
+
+
+@pytest.fixture(scope="module")
+def regression_forecaster():
+    data, cov = make_regression_data()
+    forecaster = StatespaceForecaster(
+        LocalLevelRegressionStatespace(),
+        data,
+        cov,
+        random_seed=SEED,
+        # svd handles the singular forecast covariance (regression states carry
+        # no innovations); also exercises the forecast_kwargs passthrough
+        forecast_kwargs={"mvn_method": "svd"},
+        **FAST,
+    )
+    return forecaster, data, cov
+
+
+class TestRegressionCovariates:
+    """Future covariate values reach the statespace forecast as the scenario."""
+
+    def test_future_covariates_flow_through(self, regression_forecaster):
+        forecaster, _, cov = regression_forecaster
+        tree = forecaster.forecast(cov, num_samples=20, random_seed=SEED)
+        fc = tree["predictions"]["forecast"]
+        assert fc.dims == ("chain", "draw", "time_future")
+        np.testing.assert_array_equal(fc["time_future"].values, cov["time"].values[20:])
+        assert np.isfinite(fc.values).all()
+
+    def test_horizon_shortcut_rejected_without_future_values(self, regression_forecaster):
+        forecaster, _, _ = regression_forecaster
+        with pytest.raises(AlignmentError, match="needs future values"):
+            forecaster.forecast(horizon=3, num_samples=10)
+
+
+class TestConstructionValidation:
+    """Bad inputs fail before the (expensive) MCMC fit."""
+
+    def test_three_dimensional_data_rejected(self):
+        data = xr.DataArray(np.zeros((5, 2, 2)), dims=("time", "a", "b"))
+        with pytest.raises(AlignmentError, match="one- or two-dimensional"):
+            StatespaceForecaster(LocalLevelStatespace(), data)
+
+    def test_misaligned_covariates_rejected(self, data_and_cov):
+        data, cov = data_and_cov
+        with pytest.raises(AlignmentError, match="covariates must extend data"):
+            StatespaceForecaster(LocalLevelStatespace(), data, cov.isel(time=slice(None, 3)))
+
+    def test_observed_width_mismatch_rejected(self):
+        data = xr.DataArray(
+            np.zeros((10, 2)),
+            dims=("time", "series"),
+            coords={"time": np.arange(10), "series": ["a", "b"]},
+        )
+        with pytest.raises(AlignmentError, match="k_endog=1, data width=2"):
+            StatespaceForecaster(LocalLevelStatespace(), data)
+
+    def test_reserved_forecast_kwargs_rejected(self, data_and_cov):
+        data, _ = data_and_cov
+        with pytest.raises(ValueError, match="adapter-managed"):
+            StatespaceForecaster(LocalLevelStatespace(), data, forecast_kwargs={"periods": 3})
 
 
 class TestPredictInSample:

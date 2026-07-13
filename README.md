@@ -56,10 +56,12 @@ instead of `horizon=`. See `markov_time_series` for state-space latents and
 
 [pymc-extras statespace](https://github.com/pymc-devs/pymc-extras) structural models
 (level/trend, seasonality, SARIMAX, ...) are first-class citizens too: define one as a
-`StatespaceModel` and fit it with `StatespaceForecaster` — the same `forecast`,
-`predict_in_sample`, `backtest`, and metrics calls apply, with the Kalman filter
-marginalizing the latent states instead of sampling them
-(see `docs/examples/scan_vs_statespace_local_level.ipynb`).
+`StatespaceModel` and fit it with `StatespaceForecaster` — the same `forecast`
+(including exogenous-regression covariates), `predict_in_sample`, `backtest`, and
+metrics calls apply, with the Kalman filter marginalizing the latent states instead
+of sampling them (see `docs/examples/scan_vs_statespace_local_level.ipynb`).
+The pymc-extras integrations (`PathfinderForecaster`, `StatespaceForecaster`) are an
+optional extra: install with `pip install 'pymc-forecast[extras]'`.
 
 ## Design principles
 
