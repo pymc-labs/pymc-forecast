@@ -57,6 +57,7 @@ from pymc_forecast.prediction import (
     predict_in_sample,
     thin_draws,
 )
+from pymc_forecast.statespace import StatespaceForecaster, StatespaceModel
 
 __version__ = "0.0.1.dev0"
 
@@ -76,6 +77,8 @@ __all__ = [
     "OptionalDependencyError",
     "PathfinderForecaster",
     "PymcForecastError",
+    "StatespaceForecaster",
+    "StatespaceModel",
     "__version__",
     "as_dataarray",
     "backtest",

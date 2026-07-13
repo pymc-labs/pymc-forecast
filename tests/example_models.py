@@ -6,6 +6,7 @@ import pytensor.tensor as pt
 import xarray as xr
 
 from pymc_forecast.model import ForecastingModel, Horizon, predict, time_series
+from pymc_forecast.statespace import StatespaceModel
 
 SEED = 20260709
 
@@ -74,6 +75,66 @@ def poisson_model(h: Horizon, covariates: xr.DataArray) -> None:
         lambda name, e, dims, observed: pm.Poisson(name, pt.exp(e), dims=dims, observed=observed),
         eta,
     )
+
+
+class LocalLevelStatespace(StatespaceModel):
+    """pymc-extras local linear trend + measurement error.
+
+    Priors are derived generically from ``param_info`` (constraint-driven), so
+    the model stays valid across pymc-extras component/parameter renames.
+    """
+
+    def statespace(self, data, covariates):
+        from pymc_extras.statespace import structural as st
+
+        trend = st.LevelTrend(order=2, innovations_order=[0, 1])
+        return (trend + st.MeasurementError()).build(verbose=False)
+
+    def priors(self, ss_mod, data, covariates):
+        for name, info in ss_mod.param_info.items():
+            dims = info["dims"]
+            size = {"dims": dims} if dims else {"shape": info["shape"]}
+            if info["constraints"] == "Positive semi-definite":
+                diag = pm.Gamma(f"{name}_diag", alpha=2, beta=5, dims=dims[0])
+                pm.Deterministic(name, pt.diag(diag), dims=dims)
+            elif info["constraints"] == "Positive":
+                pm.Gamma(name, alpha=2, beta=10, **size)
+            else:
+                pm.Normal(name, 0.0, 1.0, **size)
+
+
+class LocalLevelRegressionStatespace(StatespaceModel):
+    """Local level + exogenous regression fed by the package covariates.
+
+    Registers the training covariate matrix as the Regression component's
+    ``pm.Data``; the adapter feeds the future slice through as the forecast
+    scenario. The initial level prior is centered on the first observation —
+    the data-informed-prior pattern the ``data`` argument exists for.
+    """
+
+    def statespace(self, data, covariates):
+        from pymc_extras.statespace import structural as st
+
+        features = covariates["covariate"].values.tolist()
+        components = (
+            st.LevelTrend(order=1, innovations_order=[1])
+            + st.Regression(state_names=features)
+            + st.MeasurementError()
+        )
+        return components.build(verbose=False)
+
+    def priors(self, ss_mod, data, covariates):
+        pm.Data("data_regression", covariates.values)
+        pm.Normal(
+            "initial_level_trend",
+            mu=float(data.isel(time=0)),
+            sigma=1.0,
+            dims=ss_mod.param_dims["initial_level_trend"],
+        )
+        pm.Gamma("sigma_level_trend", alpha=2, beta=10, dims=ss_mod.param_dims["sigma_level_trend"])
+        pm.Normal("beta_regression", 0.0, 1.0, dims=ss_mod.param_dims["beta_regression"])
+        pm.Gamma("sigma_MeasurementError", alpha=2, beta=10)
+        pm.Deterministic("P0", pt.eye(ss_mod.k_states), dims=ss_mod.param_dims["P0"])
 
 
 def make_trend_data(t_obs: int = 30, horizon: int = 5, seed: int = SEED):

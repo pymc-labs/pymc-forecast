@@ -58,8 +58,14 @@ class BaseForecaster(abc.ABC):
             cov = as_dataarray(covariates, role="covariates")
             cov = cov.isel({TIME_DIM: slice(None, self._data.sizes[TIME_DIM])})
         self._covariates = cov
-        self.model = build_model(model_fn, self._data, self._covariates)
+        self.model = self._build_model()
         self._fit(random_seed)
+
+    def _build_model(self) -> pm.Model:
+        """Build the training model from the normalized data (called once
+        from ``__init__``); adapters for other model lifecycles override
+        this."""
+        return build_model(self.model_fn, self._data, self._covariates)
 
     @abc.abstractmethod
     def _fit(self, random_seed) -> None:

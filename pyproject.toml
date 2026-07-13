@@ -19,7 +19,6 @@ classifiers = [
 ]
 dependencies = [
     "pymc>=5.20",
-    "pymc-extras>=0.2",
     "arviz>=0.20",
     "numpy",
     "pooch",
@@ -28,6 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dataframes = ["pandas"]
+extras = ["pymc-extras>=0.10"]
 
 [project.urls]
 Repository = "https://github.com/pymc-labs/pymc_forecast"
