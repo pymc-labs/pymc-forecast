@@ -27,3 +27,31 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --all-extras
       - run: uv run pytest
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --all-extras --group docs
+      - run: uv run sphinx-build -b html -W --keep-going docs docs/_build/html
+
+  notebooks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pymc_forecast
+          key: bart-od-v1
+      - run: uv sync --all-extras --group notebooks
+      - name: Execute example notebooks (reduced settings)
+        env:
+          PYMC_FORECAST_SMOKE_TEST: "1"
+        run: |
+          for nb in docs/examples/*.ipynb; do
+            echo "::group::$nb"
+            uv run jupyter nbconvert --to notebook --execute --output-dir "${RUNNER_TEMP}/executed" "$nb"
+            echo "::endgroup::"
+          done

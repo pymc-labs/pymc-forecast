@@ -8,16 +8,22 @@ A PyMC port of [numpyro_forecast](https://github.com/juanitorduz/numpyro_forecas
 (itself a port of Pyro's `pyro.contrib.forecast`) — redesigned around PyMC idioms
 rather than a 1:1 translation.
 
-> **Status: early development.** The design and roadmap live in
-> [PLAN.md](PLAN.md) and the
-> [issue tracker](https://github.com/pymc-labs/pymc_forecast/issues).
+```{note}
+**Status: early development.** The design and roadmap live in
+[PLAN.md](https://github.com/pymc-labs/pymc_forecast/blob/main/PLAN.md) and the
+[issue tracker](https://github.com/pymc-labs/pymc_forecast/issues).
+```
 
-**Documentation:** <https://pymc-labs.github.io/pymc_forecast/> — API reference and
-executed example notebooks (univariate, hierarchical, covariates, state-space).
+## Installation
+
+```bash
+pip install pymc-forecast            # core: PyMC + ArviZ
+pip install 'pymc-forecast[extras]'  # + pymc-extras (Pathfinder, statespace)
+```
 
 ## Quickstart
 
-Write a model with one `predict()` call, fit it, and forecast:
+Write a model with one {func}`~pymc_forecast.predict` call, fit it, and forecast:
 
 ```python
 import numpy as np, pandas as pd, pymc as pm, pytensor.tensor as pt
@@ -51,20 +57,20 @@ results = backtest(y, None, model, min_train_window=48, test_window=4, stride=4,
                    num_samples=200, forecaster_options={"num_steps": 3_000}, random_seed=0)
 ```
 
-Swap `Forecaster` for `HMCForecaster` (NUTS, with `nuts_sampler="nutpie"/"numpyro"/...`)
-or `PathfinderForecaster` (pymc-extras) — the fit/forecast interface is identical.
-For models with real covariates, pass full-horizon `covariates` to `.forecast()`
-instead of `horizon=`. See `markov_time_series` for state-space latents and
-`predict_mvn` for observation noise correlated across time.
+Swap {class}`~pymc_forecast.Forecaster` for {class}`~pymc_forecast.HMCForecaster`
+(NUTS, with `nuts_sampler="nutpie"/"numpyro"/...`) or
+{class}`~pymc_forecast.PathfinderForecaster` (pymc-extras) — the fit/forecast
+interface is identical. For models with real covariates, pass full-horizon
+`covariates` to `.forecast()` instead of `horizon=`. See
+{func}`~pymc_forecast.markov_time_series` for state-space latents and
+{func}`~pymc_forecast.predict_mvn` for observation noise correlated across time.
 
 [pymc-extras statespace](https://github.com/pymc-devs/pymc-extras) structural models
 (level/trend, seasonality, SARIMAX, ...) are first-class citizens too: define one as a
-`StatespaceModel` and fit it with `StatespaceForecaster` — the same `forecast`
-(including exogenous-regression covariates), `predict_in_sample`, `backtest`, and
-metrics calls apply, with the Kalman filter marginalizing the latent states instead
-of sampling them (see `docs/examples/scan_vs_statespace_local_level.ipynb`).
-The pymc-extras integrations (`PathfinderForecaster`, `StatespaceForecaster`) are an
-optional extra: install with `pip install 'pymc-forecast[extras]'`.
+{class}`~pymc_forecast.StatespaceModel` and fit it with
+{class}`~pymc_forecast.StatespaceForecaster` — the same `forecast` (including
+exogenous-regression covariates), `predict_in_sample`, `backtest`, and metrics calls
+apply, with the Kalman filter marginalizing the latent states instead of sampling them.
 
 ## Design principles
 
@@ -82,25 +88,10 @@ optional extra: install with `pip install 'pymc-forecast[extras]'`.
   models from [pymc-extras](https://github.com/pymc-devs/pymc-extras), diagnostics
   and storage from [ArviZ](https://python.arviz.org).
 
-## Development
+```{toctree}
+:hidden:
+:maxdepth: 2
 
-Requires Python >= 3.11 and [uv](https://docs.astral.sh/uv/):
-
-```bash
-uv sync --all-extras
-uv run pytest
-uv run ruff check .
+examples/index
+api/index
 ```
-
-To build the documentation (the example notebooks are committed fully executed;
-CI re-executes them with reduced sampling settings):
-
-```bash
-uv sync --all-extras --group docs
-uv run sphinx-build -b html docs docs/_build/html
-```
-
-## License
-
-Apache-2.0. Portions derived from
-[numpyro_forecast](https://github.com/juanitorduz/numpyro_forecast) (Apache-2.0).
