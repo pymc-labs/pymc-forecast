@@ -73,6 +73,12 @@ of sampling them (see `docs/examples/scan_vs_statespace_local_level.ipynb`).
 The pymc-extras integrations (`PathfinderForecaster`, `StatespaceForecaster`) are an
 optional extra: install with `pip install 'pymc-forecast[extras]'`.
 
+Priors stay user-injectable on the model object: pass `pymc_extras.prior.Prior`
+objects directly to `time_series`/`predict`, or declare named
+`default_priors` on a `ForecastingModel`/`StatespaceModel` subclass and let
+callers override any subset with `Model(priors={...})` — nested hyper-priors
+are shared across the train/forecast split so replay semantics hold.
+
 ## Design principles
 
 - **One model trains and forecasts.** In-sample time latents are fitted; the

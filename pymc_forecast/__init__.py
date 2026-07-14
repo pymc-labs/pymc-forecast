@@ -64,6 +64,7 @@ from pymc_forecast.prediction import (
     prediction_samples,
     thin_draws,
 )
+from pymc_forecast.priors import PriorConfig
 from pymc_forecast.statespace import StatespaceForecaster, StatespaceModel
 
 __version__ = "0.0.1"
@@ -88,6 +89,7 @@ __all__ = [
     "MethodResolutionError",
     "OptionalDependencyError",
     "PathfinderForecaster",
+    "PriorConfig",
     "PymcForecastError",
     "StatespaceForecaster",
     "StatespaceModel",

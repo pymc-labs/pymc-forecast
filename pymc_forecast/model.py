@@ -30,6 +30,12 @@ from pymc_forecast.data import (
     validate_alignment,
 )
 from pymc_forecast.exceptions import HorizonError
+from pymc_forecast.priors import (
+    PriorConfig,
+    is_prior_like,
+    prior_obs_factory,
+    prior_rv_factory,
+)
 
 __all__ = [
     "FORECAST_VAR",
@@ -133,6 +139,10 @@ def time_series(
         Factory creating the variable, e.g.
         ``lambda name, dims: pm.Normal(name, 0, drift_scale, dims=dims)``.
         It must create the variable with exactly the dims it is given.
+        A pymc-extras ``Prior`` is also accepted (e.g. ``Prior("Normal",
+        mu=0, sigma=0.1)``); nested hyper-priors are created once under
+        ``name`` and shared by the in-sample and future segments (see
+        :mod:`pymc_forecast.priors`).
     dims
         Extra (non-time) dims of the latent, e.g. ``("series",)``.
 
@@ -141,6 +151,8 @@ def time_series(
     TensorVariable
         The latent over the full horizon, time on axis 0.
     """
+    if is_prior_like(rv_fn):
+        rv_fn = prior_rv_factory(rv_fn, name)
     prefix = rv_fn(name, (TIME_DIM, *dims))
     if h.future == 0:
         return prefix
@@ -177,13 +189,19 @@ def predict(
     obs_fn
         Observation factory ``(name, latent, dims, observed) -> RV``. Must
         create the variable with exactly the dims it is given, and pass
-        ``observed`` through.
+        ``observed`` through. A pymc-extras ``Prior`` is also accepted (e.g.
+        ``Prior("Normal", sigma=Prior("HalfNormal", sigma=1))``): its
+        distribution becomes the likelihood with the latent as location, and
+        nested hyper-priors are created once under ``"obs"`` and shared by
+        the observed and forecast segments (see :mod:`pymc_forecast.priors`).
     latent
         Full-horizon predictor with time on axis 0.
     dims
         Extra (non-time) dims of the observation. Default: inferred from the
         data's non-time dims (``()`` for prior-only builds).
     """
+    if is_prior_like(obs_fn):
+        obs_fn = prior_obs_factory(obs_fn, OBS_VAR)
     if dims is None:
         dims = () if h.data is None else tuple(d for d in h.data.dims if d != TIME_DIM)
     observed = None if h.data is None else h.data.transpose(TIME_DIM, ...).values
@@ -196,13 +214,33 @@ ModelFunction = Callable[[Horizon, xr.DataArray], None]
 """A model body: ``(Horizon, covariates) -> None``, called inside a ``pm.Model``."""
 
 
-class ForecastingModel(abc.ABC):
+class ForecastingModel(PriorConfig, abc.ABC):
     """Object-oriented facade over the functional primitives.
 
     Subclasses implement :meth:`model` and use the bound helpers
     :meth:`time_series` / :meth:`predict`, which thread the current
     :class:`Horizon` automatically. An instance is a valid model function for
     :func:`build_model` and the forecaster classes.
+
+    Priors are user-injectable (see :class:`~pymc_forecast.priors.PriorConfig`):
+    a subclass declares its overridable defaults in
+    :attr:`~pymc_forecast.priors.PriorConfig.default_priors` and reads
+    ``self.prior_config[...]`` in the model body; callers override any subset
+    at construction time::
+
+        from pymc_extras.prior import Prior
+
+        class LocalLevel(ForecastingModel):
+            default_priors = {
+                "drift": Prior("Normal", mu=0, sigma=0.1),
+                "noise": Prior("Normal", sigma=Prior("HalfNormal", sigma=1)),
+            }
+
+            def model(self, h, covariates):
+                drift = self.time_series("drift", self.prior_config["drift"])
+                self.predict(self.prior_config["noise"], pt.cumsum(drift))
+
+        LocalLevel(priors={"drift": Prior("StudentT", nu=4, mu=0, sigma=0.2)})
     """
 
     _horizon: Horizon | None = None
