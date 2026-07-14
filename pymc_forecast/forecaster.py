@@ -3,8 +3,10 @@
 Three inference backends behind one interface: :class:`Forecaster`
 (variational, ADVI by default), :class:`HMCForecaster` (MCMC via
 ``pm.sample``), and :class:`PathfinderForecaster` (pymc-extras Pathfinder).
-Construction fits the model on ``(data, covariates)``; :meth:`~BaseForecaster.forecast`
-then rebuilds the model over extended covariates and samples the horizon.
+Passing data at construction fits the model immediately. Alternatively,
+construct with only the model function and call :meth:`BaseForecaster.fit`
+later. :meth:`~BaseForecaster.forecast` then rebuilds the model over extended
+covariates and samples the horizon.
 """
 
 import abc
@@ -47,17 +49,45 @@ class BaseForecaster(abc.ABC):
         The model body (``(Horizon, covariates) -> None`` or a
         :class:`~pymc_forecast.model.ForecastingModel`).
     data
-        Observed training data.
+        Observed training data. Omit it to configure now and call :meth:`fit`
+        later.
     covariates
         Covariates covering (at least) the training window; surplus future
         steps are ignored during fitting. ``None`` for models without
         covariates.
     random_seed
-        Seed for the fit.
+        Default seed for the fit. A seed passed to :meth:`fit` overrides and
+        replaces it for subsequent refits.
     """
 
-    def __init__(self, model_fn, data, covariates=None, *, random_seed=None) -> None:
+    def __init__(self, model_fn, data=None, covariates=None, *, random_seed=None) -> None:
         self.model_fn = model_fn
+        self._random_seed = random_seed
+        self._is_fitted = False
+        self.model = None
+        if data is None:
+            if covariates is not None:
+                msg = "covariates cannot be supplied without training data; pass both to fit()"
+                raise ValueError(msg)
+            return
+        self.fit(data, covariates)
+
+    @property
+    def is_fitted(self) -> bool:
+        """Whether :meth:`fit` has completed successfully."""
+        return self._is_fitted
+
+    def fit(self, data, covariates=None, *, random_seed=None):
+        """Fit or refit this configured forecaster on training data.
+
+        This is the deferred counterpart to passing ``data`` and
+        ``covariates`` to the constructor. Backend options configured at
+        construction are reused. Returns ``self`` for fluent adapter
+        lifecycles.
+        """
+        if random_seed is not None:
+            self._random_seed = random_seed
+        self._is_fitted = False
         self._data = as_dataarray(data, role="data")
         if covariates is None:
             cov = null_covariates(self._data[TIME_DIM].values)
@@ -66,17 +96,23 @@ class BaseForecaster(abc.ABC):
             cov = cov.isel({TIME_DIM: slice(None, self._data.sizes[TIME_DIM])})
         self._covariates = cov
         self.model = self._build_model()
-        self._fit(random_seed)
+        self._fit(self._random_seed)
+        self._is_fitted = True
+        return self
+
+    def _require_fitted(self) -> None:
+        if not self._is_fitted:
+            msg = "forecaster is not fit; call fit(data, covariates) before prediction"
+            raise RuntimeError(msg)
 
     def _build_model(self) -> pm.Model:
         """Build the training model from the normalized data (called once
-        from ``__init__``); adapters for other model lifecycles override
-        this."""
+        from :meth:`fit`); adapters for other model lifecycles override this."""
         return build_model(self.model_fn, self._data, self._covariates)
 
     @abc.abstractmethod
     def _fit(self, random_seed) -> None:
-        """Fit the training model (called once from ``__init__``)."""
+        """Fit the training model (called by :meth:`fit`)."""
 
     @abc.abstractmethod
     def draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
@@ -139,6 +175,7 @@ class BaseForecaster(abc.ABC):
         DataTree
             With a ``predictions`` group carrying ``time_future`` coords.
         """
+        self._require_fitted()
         provided = sum(
             arg is not None for arg in (covariates, horizon, future_index, future_covariates)
         )
@@ -179,6 +216,7 @@ class BaseForecaster(abc.ABC):
         progressbar: bool = False,
     ):
         """Sample the in-sample posterior predictive of ``"obs"``."""
+        self._require_fitted()
         posterior = self.draw_posterior(num_samples, random_seed)
         return predict_in_sample(
             self.model_fn,
@@ -209,6 +247,16 @@ def _resolve_optimizer(optimizer):
     raise MethodResolutionError(msg)
 
 
+def _resolve_progressbar(progressbar, kwargs: dict, kwargs_name: str) -> bool:
+    """Hoist a legacy backend-kwargs ``progressbar`` to the common option."""
+    if "progressbar" in kwargs:
+        if progressbar is not None:
+            msg = f"pass progressbar directly or through {kwargs_name}, not both"
+            raise ValueError(msg)
+        progressbar = kwargs.pop("progressbar")
+    return False if progressbar is None else bool(progressbar)
+
+
 class Forecaster(BaseForecaster):
     """Fit a forecasting model with variational inference (ADVI by default).
 
@@ -225,7 +273,10 @@ class Forecaster(BaseForecaster):
     num_steps
         Number of optimization steps.
     fit_kwargs
-        Extra keyword arguments for ``pm.fit``.
+        Extra keyword arguments for ``pm.fit``. ``progressbar`` is accepted
+        here for compatibility, but the direct argument is preferred.
+    progressbar
+        Show the fitting progress bar.
 
     Attributes
     ----------
@@ -238,7 +289,7 @@ class Forecaster(BaseForecaster):
     def __init__(
         self,
         model_fn,
-        data,
+        data=None,
         covariates=None,
         *,
         method="advi",
@@ -246,11 +297,13 @@ class Forecaster(BaseForecaster):
         num_steps: int = 10_000,
         random_seed=None,
         fit_kwargs: Mapping | None = None,
+        progressbar: bool | None = None,
     ) -> None:
         self._method = method
         self._optimizer = _resolve_optimizer(optimizer)
         self._num_steps = num_steps
         self._fit_kwargs = dict(fit_kwargs or {})
+        self._progressbar = _resolve_progressbar(progressbar, self._fit_kwargs, "fit_kwargs")
         super().__init__(model_fn, data, covariates, random_seed=random_seed)
 
     def _fit(self, random_seed) -> None:
@@ -261,7 +314,7 @@ class Forecaster(BaseForecaster):
                 model=self.model,
                 random_seed=random_seed,
                 obj_optimizer=self._optimizer,
-                progressbar=self._fit_kwargs.pop("progressbar", False),
+                progressbar=self._progressbar,
                 **self._fit_kwargs,
             )
         except KeyError as err:
@@ -274,6 +327,7 @@ class Forecaster(BaseForecaster):
 
     def draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
         """Draw ``num_samples`` posterior samples from the approximation."""
+        self._require_fitted()
         idata = self.approx.sample(draws=num_samples, random_seed=random_seed)
         return posterior_dataset(idata)
 
@@ -291,7 +345,10 @@ class HMCForecaster(BaseForecaster):
         NUTS backend: ``"pymc"`` (default), ``"nutpie"``, ``"numpyro"``, or
         ``"blackjax"``.
     sample_kwargs
-        Extra keyword arguments for ``pm.sample``.
+        Extra keyword arguments for ``pm.sample``. ``progressbar`` is accepted
+        here for compatibility, but the direct argument is preferred.
+    progressbar
+        Show the sampling progress bar.
 
     Attributes
     ----------
@@ -302,7 +359,7 @@ class HMCForecaster(BaseForecaster):
     def __init__(
         self,
         model_fn,
-        data,
+        data=None,
         covariates=None,
         *,
         draws: int = 1000,
@@ -311,12 +368,14 @@ class HMCForecaster(BaseForecaster):
         nuts_sampler: str = "pymc",
         random_seed=None,
         sample_kwargs: Mapping | None = None,
+        progressbar: bool | None = None,
     ) -> None:
         self._draws = draws
         self._tune = tune
         self._chains = chains
         self._nuts_sampler = nuts_sampler
         self._sample_kwargs = dict(sample_kwargs or {})
+        self._progressbar = _resolve_progressbar(progressbar, self._sample_kwargs, "sample_kwargs")
         super().__init__(model_fn, data, covariates, random_seed=random_seed)
 
     def _fit(self, random_seed) -> None:
@@ -327,12 +386,13 @@ class HMCForecaster(BaseForecaster):
             nuts_sampler=self._nuts_sampler,
             model=self.model,
             random_seed=random_seed,
-            progressbar=self._sample_kwargs.pop("progressbar", False),
+            progressbar=self._progressbar,
             **self._sample_kwargs,
         )
 
     def draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
         """Subsample ``num_samples`` draws from the MCMC posterior."""
+        self._require_fitted()
         return thin_draws(self.idata, num_samples, random_seed)
 
 
@@ -348,7 +408,10 @@ class PathfinderForecaster(BaseForecaster):
         See :class:`BaseForecaster`.
     pathfinder_kwargs
         Extra keyword arguments for ``pymc_extras.fit_pathfinder``
-        (e.g. ``num_paths``, ``num_draws``).
+        (e.g. ``num_paths``, ``num_draws``). ``progressbar`` is accepted here
+        for compatibility, but the direct argument is preferred.
+    progressbar
+        Show the fitting progress bar.
 
     Attributes
     ----------
@@ -359,13 +422,17 @@ class PathfinderForecaster(BaseForecaster):
     def __init__(
         self,
         model_fn,
-        data,
+        data=None,
         covariates=None,
         *,
         random_seed=None,
         pathfinder_kwargs: Mapping | None = None,
+        progressbar: bool | None = None,
     ) -> None:
         self._pathfinder_kwargs = dict(pathfinder_kwargs or {})
+        self._progressbar = _resolve_progressbar(
+            progressbar, self._pathfinder_kwargs, "pathfinder_kwargs"
+        )
         super().__init__(model_fn, data, covariates, random_seed=random_seed)
 
     def _fit(self, random_seed) -> None:
@@ -376,10 +443,11 @@ class PathfinderForecaster(BaseForecaster):
         self.idata = fit_pathfinder(
             model=self.model,
             random_seed=random_seed,
-            progressbar=self._pathfinder_kwargs.pop("progressbar", False),
+            progressbar=self._progressbar,
             **self._pathfinder_kwargs,
         )
 
     def draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
         """Subsample ``num_samples`` draws from the Pathfinder posterior."""
+        self._require_fitted()
         return thin_draws(self.idata, num_samples, random_seed)

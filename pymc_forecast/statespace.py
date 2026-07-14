@@ -149,10 +149,11 @@ class StatespaceForecaster(HMCForecaster):
 
     An :class:`~pymc_forecast.forecaster.HMCForecaster` whose training model
     is built through the statespace lifecycle instead of
-    :func:`~pymc_forecast.model.build_model`: fit on construction with NUTS,
+    :func:`~pymc_forecast.model.build_model`: fit immediately with NUTS when
+    data is supplied, or configure first and call :meth:`fit` later;
     :meth:`draw_posterior`, :meth:`forecast` returning a labeled
-    ``predictions`` group, :meth:`predict_in_sample` — so it drops into
-    :func:`~pymc_forecast.evaluate.backtest` via
+    ``predictions`` group, and :meth:`predict_in_sample` then follow the common
+    protocol. It drops into :func:`~pymc_forecast.evaluate.backtest` via
     ``forecaster_cls=StatespaceForecaster``.
 
     pymc-extras is imported lazily, so constructing this class is the opt-in
@@ -165,7 +166,7 @@ class StatespaceForecaster(HMCForecaster):
         its ``statespace`` / ``priors`` methods).
     data
         Observed training data (univariate series or 2-d with a named series
-        dim).
+        dim). Omit it to configure now and call :meth:`fit` later.
     covariates
         Covariates covering (at least) the training window, passed through to
         the model definition; surplus future steps are ignored during fitting.
@@ -176,9 +177,12 @@ class StatespaceForecaster(HMCForecaster):
         NUTS backend: ``"pymc"`` (default), ``"nutpie"``, ``"numpyro"``, or
         ``"blackjax"``.
     random_seed
-        Seed for the fit.
+        Default seed for the fit.
     sample_kwargs
-        Extra keyword arguments for ``pm.sample``.
+        Extra keyword arguments for ``pm.sample``. ``progressbar`` is accepted
+        here for compatibility, but the direct argument is preferred.
+    progressbar
+        Show the MCMC sampling progress bar.
     build_kwargs
         Extra keyword arguments for ``build_statespace_graph``, such as
         ``mvn_method`` for the likelihood decomposition.
@@ -201,7 +205,7 @@ class StatespaceForecaster(HMCForecaster):
     def __init__(
         self,
         model_fn,
-        data,
+        data=None,
         covariates=None,
         *,
         draws: int = 1000,
@@ -212,6 +216,7 @@ class StatespaceForecaster(HMCForecaster):
         sample_kwargs: Mapping | None = None,
         build_kwargs: Mapping | None = None,
         forecast_kwargs: Mapping | None = None,
+        progressbar: bool | None = None,
     ) -> None:
         try:
             import pymc_extras.statespace  # noqa: F401
@@ -235,6 +240,7 @@ class StatespaceForecaster(HMCForecaster):
             nuts_sampler=nuts_sampler,
             random_seed=random_seed,
             sample_kwargs=sample_kwargs,
+            progressbar=progressbar,
         )
 
     def _build_model(self) -> pm.Model:
@@ -379,6 +385,7 @@ class StatespaceForecaster(HMCForecaster):
             ``(chain, draw, time_future, ...)``) and the latent state
             trajectories as ``"forecast_latent"``.
         """
+        self._require_fitted()
         provided = sum(
             arg is not None for arg in (covariates, horizon, future_index, future_covariates)
         )
@@ -454,6 +461,7 @@ class StatespaceForecaster(HMCForecaster):
             With a ``posterior_predictive`` group holding ``"obs"`` (dims
             ``(chain, draw, time, ...)``).
         """
+        self._require_fitted()
         posterior = self.draw_posterior(num_samples, random_seed)
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message=_NO_TIME_INDEX_MESSAGE)

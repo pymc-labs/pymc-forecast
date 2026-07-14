@@ -45,6 +45,28 @@ Swap {class}`~pymc_forecast.Forecaster` for {class}`~pymc_forecast.HMCForecaster
 {class}`~pymc_forecast.PathfinderForecaster` (pymc-extras) — the fit/forecast
 interface is identical.
 
+All forecaster constructors accept `progressbar=` directly, so inference
+backends can be swapped without moving that option into `fit_kwargs`,
+`sample_kwargs`, or `pathfinder_kwargs`:
+
+```python
+fc = HMCForecaster(model, train, draws=1_000, progressbar=True)
+```
+
+For configure-now / fit-later lifecycles, omit the data at construction and
+call `fit()` explicitly. Passing data to the constructor remains the
+equivalent one-step path:
+
+```python
+fc = Forecaster(model, num_steps=5_000, progressbar=False)
+# Store or pass `fc` as a configured object, then fit when data is available.
+fc.fit(train, random_seed=0)
+idata = fc.forecast(horizon=8, num_samples=500)
+```
+
+The same object can be refit; its backend configuration is reused. Predictive
+methods raise a clear error until `fit()` has completed.
+
 ## Covariates and richer latents
 
 For models with real covariates, pass full-horizon `covariates` to `.forecast()`

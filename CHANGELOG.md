@@ -6,6 +6,14 @@ The dim/coord/group/variable names on prediction outputs (documented in
 [docs/schema.md](docs/schema.md)) are public API: any change to them is a
 breaking change, made only in a minor release and called out here.
 
+## Unreleased
+
+- All forecaster constructors now accept `progressbar=` directly and support
+  a configure-now / fit-later lifecycle by omitting constructor data and
+  calling `fit(data, covariates)` explicitly. Immediate fit-on-construction
+  remains the default when data is supplied
+  ([#39](https://github.com/pymc-labs/pymc-forecast/issues/39)).
+
 ## 0.1.0 (2026-07-14)
 
 Five features aimed at making the package cleanly wrappable as a model

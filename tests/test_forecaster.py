@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import xarray as xr
 from example_models import (
     RandomWalkForecastingModel,
     linear_model,
@@ -9,9 +10,29 @@ from example_models import (
 )
 
 from pymc_forecast.exceptions import AlignmentError, MethodResolutionError
-from pymc_forecast.forecaster import Forecaster, HMCForecaster, PathfinderForecaster
+from pymc_forecast.forecaster import (
+    BaseForecaster,
+    Forecaster,
+    HMCForecaster,
+    PathfinderForecaster,
+)
 
 SEED = 4242
+
+
+class LifecycleForecaster(BaseForecaster):
+    """No-inference backend for exercising the shared fit lifecycle."""
+
+    def __init__(self, *args, **kwargs):
+        self.fit_seeds = []
+        super().__init__(*args, **kwargs)
+
+    def _fit(self, random_seed):
+        self.fit_seeds.append(random_seed)
+
+    def draw_posterior(self, num_samples, random_seed=None):
+        self._require_fitted()
+        return xr.Dataset()
 
 
 class TestForecasterVI:
@@ -65,6 +86,51 @@ class TestForecasterVI:
         data, cov = make_trend_data()
         with pytest.raises(MethodResolutionError, match="unknown VI method"):
             Forecaster(linear_model, data, cov, method="not_a_method", num_steps=10)
+
+
+class TestConstructorLifecycle:
+    def test_deferred_fit(self):
+        fc = LifecycleForecaster(linear_model, random_seed=1)
+        assert not fc.is_fitted
+        assert fc.model is None
+        assert fc.fit_seeds == []
+        with pytest.raises(RuntimeError, match="call fit"):
+            fc.predict_in_sample()
+        with pytest.raises(RuntimeError, match="call fit"):
+            fc.forecast(horizon=2)
+
+        data, cov = make_trend_data()
+        assert fc.fit(data, cov, random_seed=2) is fc
+        assert fc.is_fitted
+        assert fc.model is not None
+        assert fc.fit_seeds == [2]
+
+        fc.fit(data, cov)
+        assert fc.fit_seeds == [2, 2]
+
+    def test_covariates_need_data(self):
+        _, cov = make_trend_data()
+        with pytest.raises(ValueError, match="without training data"):
+            LifecycleForecaster(linear_model, covariates=cov)
+
+    @pytest.mark.parametrize("forecaster_cls", [Forecaster, HMCForecaster, PathfinderForecaster])
+    def test_progressbar_is_a_uniform_direct_option(self, forecaster_cls):
+        fc = forecaster_cls(linear_model, progressbar=True)
+        assert fc._progressbar is True
+        assert not fc.is_fitted
+
+    def test_legacy_progressbar_mapping_remains_supported(self):
+        fc = Forecaster(linear_model, fit_kwargs={"progressbar": True})
+        assert fc._progressbar is True
+        assert "progressbar" not in fc._fit_kwargs
+
+    def test_duplicate_progressbar_is_rejected(self):
+        with pytest.raises(ValueError, match="not both"):
+            HMCForecaster(
+                linear_model,
+                progressbar=False,
+                sample_kwargs={"progressbar": True},
+            )
 
 
 class TestForecastByHorizon:
