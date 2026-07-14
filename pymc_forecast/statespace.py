@@ -351,7 +351,9 @@ class StatespaceForecaster(HMCForecaster):
             Number of steps to forecast past the training data.
         future_index
             Time coordinate values of the forecast horizon, supplied at
-            forecast time (models without exogenous inputs only).
+            forecast time (models without exogenous inputs only) — the
+            covariate-free half of the predict-time horizon capability;
+            ``future_covariates`` is the with-exogenous half.
         future_covariates
             Covariates covering only the forecast horizon, with a time index
             lying after the training window; fed through as the forecast

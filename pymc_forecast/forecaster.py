@@ -120,11 +120,15 @@ class BaseForecaster(abc.ABC):
             window, e.g. a ``DatetimeIndex`` of the period to predict. The
             horizon length is derived from it, so it need not be known at fit
             time. Forecast steps are drawn consecutively and labeled with
-            these coordinates.
+            these coordinates. The covariate-free half of the predict-time
+            horizon capability; ``future_covariates`` is the with-covariates
+            half.
         future_covariates
             Covariates covering only the forecast horizon, with a time index
             lying after the training window; the forecast is conditioned on
-            them. Structure (dims, covariate names and order) must match the
+            them — the with-covariates half of the predict-time horizon
+            capability (``future_index`` is the covariate-free half).
+            Structure (dims, covariate names and order) must match the
             training covariates. The horizon length is derived from it, so it
             need not be known at fit time.
         var_names, random_seed, progressbar
