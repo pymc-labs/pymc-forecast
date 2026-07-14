@@ -46,6 +46,8 @@ from pymc_forecast.metrics import (
     make_mase,
 )
 from pymc_forecast.model import (
+    FORECAST_VAR,
+    OBS_VAR,
     ForecastingModel,
     Horizon,
     build_model,
@@ -64,7 +66,9 @@ __version__ = "0.0.1"
 
 __all__ = [
     "DEFAULT_METRICS",
+    "FORECAST_VAR",
     "FUTURE_DIM",
+    "OBS_VAR",
     "TIME_DIM",
     "AlignmentError",
     "BacktestResult",

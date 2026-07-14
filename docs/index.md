@@ -67,5 +67,6 @@ forecast = idata["predictions"]["forecast"]               # dims: (chain, draw, 
 
 quickstart
 examples/index
+schema
 api/index
 ```
