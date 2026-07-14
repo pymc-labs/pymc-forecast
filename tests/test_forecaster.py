@@ -1,5 +1,8 @@
 import numpy as np
+import pymc as pm
+import pytensor.tensor as pt
 import pytest
+import xarray as xr
 from example_models import (
     RandomWalkForecastingModel,
     linear_model,
@@ -9,9 +12,40 @@ from example_models import (
 )
 
 from pymc_forecast.exceptions import AlignmentError, MethodResolutionError
-from pymc_forecast.forecaster import Forecaster, HMCForecaster, PathfinderForecaster
+from pymc_forecast.forecaster import (
+    BaseForecaster,
+    Forecaster,
+    HMCForecaster,
+    PathfinderForecaster,
+)
+from pymc_forecast.model import predict
 
 SEED = 4242
+
+
+def deterministic_replay_model(h, covariates):
+    """Expose one posterior scalar across every time step without noise."""
+    value = pm.Normal("value")
+    latent = pt.repeat(value, h.duration)
+    predict(
+        h,
+        lambda name, x, dims, observed: pm.Deterministic(name, x, dims=dims),
+        latent,
+    )
+
+
+class StubForecaster(BaseForecaster):
+    """No-fit forecaster for testing explicit posterior plumbing."""
+
+    def _fit(self, random_seed):
+        self.draw_calls = []
+
+    def draw_posterior(self, num_samples, random_seed=None):
+        self.draw_calls.append((num_samples, random_seed))
+        return xr.Dataset(
+            {"value": (("chain", "draw"), np.zeros((1, num_samples)))},
+            coords={"chain": [0], "draw": np.arange(num_samples)},
+        )
 
 
 class TestForecasterVI:
@@ -65,6 +99,50 @@ class TestForecasterVI:
         data, cov = make_trend_data()
         with pytest.raises(MethodResolutionError, match="unknown VI method"):
             Forecaster(linear_model, data, cov, method="not_a_method", num_steps=10)
+
+
+class TestFixedPosterior:
+    @pytest.fixture
+    def fc(self):
+        data = xr.DataArray([0.0, 0.0], dims="time", coords={"time": [0, 1]})
+        return StubForecaster(deterministic_replay_model, data)
+
+    @pytest.fixture
+    def posterior(self):
+        values = np.array([[-2.0, -1.0, 0.0], [1.0, 2.0, 3.0]])
+        return xr.Dataset(
+            {"value": (("chain", "draw"), values)},
+            coords={"chain": [4, 9], "draw": [10, 20, 30]},
+        )
+
+    def test_same_posterior_preserves_draw_alignment(self, fc, posterior):
+        inside = fc.predict_in_sample(posterior=posterior, random_seed=SEED)[
+            "posterior_predictive"
+        ]["obs"]
+        future = fc.forecast(horizon=2, posterior=posterior, random_seed=SEED)["predictions"][
+            "forecast"
+        ]
+
+        assert inside.sizes == {"chain": 2, "draw": 3, "time": 2}
+        assert future.sizes == {"chain": 2, "draw": 3, "time_future": 2}
+        np.testing.assert_array_equal(inside["chain"], posterior["chain"])
+        np.testing.assert_array_equal(inside["draw"], posterior["draw"])
+        np.testing.assert_array_equal(future["chain"], posterior["chain"])
+        np.testing.assert_array_equal(future["draw"], posterior["draw"])
+        np.testing.assert_array_equal(inside.isel(time=0), posterior["value"])
+        np.testing.assert_array_equal(future.isel(time_future=0), posterior["value"])
+        assert fc.draw_calls == []
+
+    def test_num_samples_is_rejected_with_posterior(self, fc, posterior):
+        with pytest.raises(ValueError, match="num_samples cannot be combined"):
+            fc.predict_in_sample(num_samples=2, posterior=posterior)
+        with pytest.raises(ValueError, match="num_samples cannot be combined"):
+            fc.forecast(horizon=2, num_samples=2, posterior=posterior)
+
+    def test_default_still_draws_one_hundred_samples(self, fc):
+        result = fc.predict_in_sample(random_seed=SEED)
+        assert result["posterior_predictive"]["obs"].sizes["draw"] == 100
+        assert fc.draw_calls == [(100, SEED)]
 
 
 class TestForecastByHorizon:

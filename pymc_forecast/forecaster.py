@@ -85,11 +85,12 @@ class BaseForecaster(abc.ABC):
     def forecast(
         self,
         covariates=None,
-        num_samples: int = 100,
+        num_samples: int | None = None,
         *,
         horizon: int | None = None,
         future_index=None,
         future_covariates=None,
+        posterior=None,
         var_names=None,
         random_seed=None,
         progressbar: bool = False,
@@ -110,7 +111,9 @@ class BaseForecaster(abc.ABC):
             Covariates spanning training window + forecast horizon (time coords
             must extend the training data's).
         num_samples
-            Number of posterior draws (and forecast samples).
+            Number of posterior draws (and forecast samples). Defaults to 100
+            when ``posterior`` is not supplied. Cannot be combined with an
+            explicit ``posterior``.
         horizon
             Number of steps to forecast past the training data (covariate-free
             models only).
@@ -131,6 +134,11 @@ class BaseForecaster(abc.ABC):
             Structure (dims, covariate names and order) must match the
             training covariates. The horizon length is derived from it, so it
             need not be known at fit time.
+        posterior
+            Optional fitted posterior (``DataTree``/``InferenceData`` or bare
+            ``Dataset``) to condition on directly. Reuse the same dataset in
+            multiple predictive calls to preserve draw-for-draw parameter
+            alignment across their ``chain`` and ``draw`` coordinates.
         var_names, random_seed, progressbar
             Passed through to :func:`pymc_forecast.prediction.forecast`.
 
@@ -160,7 +168,13 @@ class BaseForecaster(abc.ABC):
             covariates = null_covariates(full_index)
         elif future_covariates is not None:
             covariates = concat_covariates(self._covariates, future_covariates)
-        posterior = self.draw_posterior(num_samples, random_seed)
+        if posterior is None:
+            posterior = self.draw_posterior(
+                100 if num_samples is None else num_samples, random_seed
+            )
+        elif num_samples is not None:
+            msg = "num_samples cannot be combined with an explicit posterior"
+            raise ValueError(msg)
         return _forecast(
             self.model_fn,
             posterior,
@@ -173,13 +187,34 @@ class BaseForecaster(abc.ABC):
 
     def predict_in_sample(
         self,
-        num_samples: int = 100,
+        num_samples: int | None = None,
         *,
+        posterior=None,
         random_seed=None,
         progressbar: bool = False,
     ):
-        """Sample the in-sample posterior predictive of ``"obs"``."""
-        posterior = self.draw_posterior(num_samples, random_seed)
+        """Sample the in-sample posterior predictive of ``"obs"``.
+
+        Parameters
+        ----------
+        num_samples
+            Number of posterior draws. Defaults to 100 when ``posterior`` is
+            not supplied. Cannot be combined with an explicit ``posterior``.
+        posterior
+            Optional fitted posterior to condition on directly. Passing the
+            same dataset here and to :meth:`forecast` preserves draw-for-draw
+            parameter alignment across both outputs.
+        random_seed, progressbar
+            Passed through to
+            :func:`pymc_forecast.prediction.predict_in_sample`.
+        """
+        if posterior is None:
+            posterior = self.draw_posterior(
+                100 if num_samples is None else num_samples, random_seed
+            )
+        elif num_samples is not None:
+            msg = "num_samples cannot be combined with an explicit posterior"
+            raise ValueError(msg)
         return predict_in_sample(
             self.model_fn,
             posterior,

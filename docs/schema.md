@@ -55,6 +55,16 @@ So a univariate forecast is `(chain, draw, time_future)` and a hierarchical
 one `(chain, draw, time_future, series)`, with real coordinate values on the
 time and series axes.
 
+## Draw coherence across predictive calls
+
+The forecaster methods accept an explicit fitted posterior through
+`posterior=`. Passing the same posterior dataset to `predict_in_sample()` and
+`forecast()` preserves its `chain` and `draw` shape and ordering, so draw *i*
+in both outputs is conditioned on the same parameter draw. When `posterior=`
+is omitted, each method draws its own posterior sample as before; those
+separate calls are not draw-aligned. `num_samples` cannot be combined with
+`posterior=` because the latter's complete sample coordinates are retained.
+
 ## Mapping onto downstream coordinates
 
 Because the names are fixed and the coordinates are real, remapping is a

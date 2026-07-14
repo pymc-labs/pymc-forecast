@@ -6,6 +6,13 @@ The dim/coord/group/variable names on prediction outputs (documented in
 [docs/schema.md](docs/schema.md)) are public API: any change to them is a
 breaking change, made only in a minor release and called out here.
 
+## Unreleased
+
+- `BaseForecaster.forecast()` and `predict_in_sample()` now accept an explicit
+  `posterior=` so multiple predictive calls can reuse identical parameter
+  draws and remain aligned by `chain`/`draw`
+  ([#37](https://github.com/pymc-labs/pymc-forecast/issues/37)).
+
 ## 0.1.0 (2026-07-14)
 
 Five features aimed at making the package cleanly wrappable as a model
