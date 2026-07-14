@@ -53,9 +53,29 @@ when accuracy matters more than speed.
 Swap {class}`~pymc_forecast.Forecaster` for {class}`~pymc_forecast.HMCForecaster`
 (NUTS, with `nuts_sampler="nutpie"/"numpyro"/...`) or
 {class}`~pymc_forecast.PathfinderForecaster` (pymc-extras) — the fit/forecast
-interface is identical. All forecasters accept `progressbar=` directly, and
-all support a deferred fit for configure-now / fit-later lifecycles:
-`fc = HMCForecaster(model); fc.fit(train)`.
+interface is identical. Every forecaster (including
+{class}`~pymc_forecast.StatespaceForecaster`) accepts `progressbar=` directly,
+so backends can be swapped without moving that option into `fit_kwargs`,
+`sample_kwargs`, or `pathfinder_kwargs`:
+
+```python
+fc = HMCForecaster(model, train, draws=1_000, progressbar=True)
+```
+
+For configure-now / fit-later lifecycles (sklearn-style adapters), omit the
+data at construction and call `fit()` explicitly — passing data to the
+constructor remains the equivalent one-step path:
+
+```python
+fc = Forecaster(model, num_steps=5_000, progressbar=False)
+# store or pass `fc` as a configured object, then fit when data is available
+fc.fit(train, random_seed=0)
+idata = fc.forecast(horizon=8, num_samples=500)
+```
+
+The same object can be refit; its backend configuration is reused. Predictive
+methods raise {class}`~pymc_forecast.NotFittedError` until `fit()` has
+completed, and `fc.is_fitted` reports the state.
 
 ## Covariates and richer latents
 

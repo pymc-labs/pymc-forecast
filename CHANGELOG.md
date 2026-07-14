@@ -24,10 +24,12 @@ breaking change, made only in a minor release and called out here.
   (`fc.losses`) before use
   ([#38](https://github.com/pymc-labs/pymc-forecast/issues/38)).
 - Uniform constructor surface: every forecaster (including
-  `StatespaceForecaster`) accepts `progressbar=` directly, and all support a
-  deferred fit — construct without data, then `fc.fit(data, covariates)`
-  (returns `self`); predictive calls on an unfitted forecaster raise the new
-  `NotFittedError`
+  `StatespaceForecaster`) accepts `progressbar=` directly (the escape-hatch
+  kwargs still accept it for compatibility; passing both raises), and all
+  support a deferred fit — construct without data, then
+  `fc.fit(data, covariates)` (returns `self`; refitting reuses the backend
+  configuration). Predictive calls on an unfitted forecaster raise the new
+  `NotFittedError`, and `is_fitted` reports the state
   ([#39](https://github.com/pymc-labs/pymc-forecast/issues/39)).
 
 ## 0.1.0 (2026-07-14)

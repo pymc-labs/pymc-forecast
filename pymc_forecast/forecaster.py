@@ -53,6 +53,10 @@ CONVERGENCE_WINDOW_FRACTION = 0.1
 midpoint of the run, one at the end) compared by the post-fit ADVI
 convergence check (see :func:`_check_vi_convergence`)."""
 
+CONVERGENCE_MIN_WINDOW = 10
+"""Minimum steps per convergence-check window; shorter loss histories are
+too noisy to assess and are skipped."""
+
 
 class BaseForecaster(abc.ABC):
     """Shared fit/forecast plumbing.
@@ -84,6 +88,7 @@ class BaseForecaster(abc.ABC):
         self.model_fn = model_fn
         self._random_seed = random_seed
         self._is_fitted = False
+        self.model = None
         if data is None:
             if covariates is not None:
                 msg = (
@@ -94,12 +99,18 @@ class BaseForecaster(abc.ABC):
             return
         self.fit(data, covariates, random_seed=random_seed)
 
+    @property
+    def is_fitted(self) -> bool:
+        """Whether :meth:`fit` has completed successfully."""
+        return self._is_fitted
+
     def fit(self, data, covariates=None, *, random_seed=None) -> "BaseForecaster":
         """Fit the model on ``(data, covariates)`` and return ``self``.
 
         Called automatically when the forecaster is constructed with data;
         call it explicitly on a forecaster constructed without data (or to
-        refit an existing one on new data).
+        refit an existing one on new data — the backend configuration is
+        reused).
 
         Parameters
         ----------
@@ -108,6 +119,7 @@ class BaseForecaster(abc.ABC):
         random_seed
             Seed for the fit; defaults to the constructor's ``random_seed``.
         """
+        self._is_fitted = False
         self._data = as_dataarray(data, role="data")
         if covariates is None:
             cov = null_covariates(self._data[TIME_DIM].values)
@@ -314,6 +326,16 @@ def _resolve_optimizer(optimizer):
     raise MethodResolutionError(msg)
 
 
+def _resolve_progressbar(progressbar, kwargs: dict, kwargs_name: str) -> bool:
+    """Hoist a backend-kwargs ``progressbar`` to the uniform direct option."""
+    if "progressbar" in kwargs:
+        if progressbar is not None:
+            msg = f"pass progressbar directly or through {kwargs_name}, not both"
+            raise ValueError(msg)
+        progressbar = kwargs.pop("progressbar")
+    return False if progressbar is None else bool(progressbar)
+
+
 def _check_vi_convergence(losses, num_steps: int) -> None:
     """Warn when the ELBO loss is still clearly descending at the end of a fit.
 
@@ -329,9 +351,12 @@ def _check_vi_convergence(losses, num_steps: int) -> None:
     noise, so the absence of a warning is not proof of convergence.
     """
     hist = np.asarray(losses, dtype=float)
-    hist = hist[np.isfinite(hist)]
-    n = int(len(hist) * CONVERGENCE_WINDOW_FRACTION)
-    if n < 2:
+    if not np.isfinite(hist).all():
+        msg = "ADVI convergence could not be assessed: the loss history contains non-finite values."
+        warnings.warn(msg, UserWarning, stacklevel=2)
+        return
+    n = max(int(len(hist) * CONVERGENCE_WINDOW_FRACTION), CONVERGENCE_MIN_WINDOW)
+    if len(hist) // 2 + n > len(hist) - n:
         return
     last = hist[-n:]
     mid = hist[len(hist) // 2 :][:n]
@@ -377,7 +402,9 @@ class Forecaster(BaseForecaster):
     progressbar
         Show the fit progress bar.
     fit_kwargs
-        Extra keyword arguments for ``pm.fit``.
+        Extra keyword arguments for ``pm.fit``. ``progressbar`` is accepted
+        here for compatibility, but the direct argument is preferred (passing
+        both raises).
 
     Attributes
     ----------
@@ -397,18 +424,17 @@ class Forecaster(BaseForecaster):
         optimizer=None,
         num_steps: int = 10_000,
         random_seed=None,
-        progressbar: bool = False,
+        progressbar: bool | None = None,
         fit_kwargs: Mapping | None = None,
     ) -> None:
         self._method = method
         self._optimizer = _resolve_optimizer(optimizer)
         self._num_steps = num_steps
-        self._progressbar = progressbar
         self._fit_kwargs = dict(fit_kwargs or {})
+        self._progressbar = _resolve_progressbar(progressbar, self._fit_kwargs, "fit_kwargs")
         super().__init__(model_fn, data, covariates, random_seed=random_seed)
 
     def _fit(self, random_seed) -> None:
-        fit_kwargs = dict(self._fit_kwargs)
         try:
             self.approx = pm.fit(
                 n=self._num_steps,
@@ -416,8 +442,8 @@ class Forecaster(BaseForecaster):
                 model=self.model,
                 random_seed=random_seed,
                 obj_optimizer=self._optimizer,
-                progressbar=fit_kwargs.pop("progressbar", self._progressbar),
-                **fit_kwargs,
+                progressbar=self._progressbar,
+                **self._fit_kwargs,
             )
         except KeyError as err:
             msg = (
@@ -449,7 +475,9 @@ class HMCForecaster(BaseForecaster):
     progressbar
         Show the sampling progress bar.
     sample_kwargs
-        Extra keyword arguments for ``pm.sample``.
+        Extra keyword arguments for ``pm.sample``. ``progressbar`` is
+        accepted here for compatibility, but the direct argument is preferred
+        (passing both raises).
 
     Attributes
     ----------
@@ -468,19 +496,18 @@ class HMCForecaster(BaseForecaster):
         chains: int = 2,
         nuts_sampler: str = "pymc",
         random_seed=None,
-        progressbar: bool = False,
+        progressbar: bool | None = None,
         sample_kwargs: Mapping | None = None,
     ) -> None:
         self._draws = draws
         self._tune = tune
         self._chains = chains
         self._nuts_sampler = nuts_sampler
-        self._progressbar = progressbar
         self._sample_kwargs = dict(sample_kwargs or {})
+        self._progressbar = _resolve_progressbar(progressbar, self._sample_kwargs, "sample_kwargs")
         super().__init__(model_fn, data, covariates, random_seed=random_seed)
 
     def _fit(self, random_seed) -> None:
-        sample_kwargs = dict(self._sample_kwargs)
         self.idata = pm.sample(
             draws=self._draws,
             tune=self._tune,
@@ -488,8 +515,8 @@ class HMCForecaster(BaseForecaster):
             nuts_sampler=self._nuts_sampler,
             model=self.model,
             random_seed=random_seed,
-            progressbar=sample_kwargs.pop("progressbar", self._progressbar),
-            **sample_kwargs,
+            progressbar=self._progressbar,
+            **self._sample_kwargs,
         )
 
     def _draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
@@ -511,7 +538,9 @@ class PathfinderForecaster(BaseForecaster):
         Show the fit progress bar.
     pathfinder_kwargs
         Extra keyword arguments for ``pymc_extras.fit_pathfinder``
-        (e.g. ``num_paths``, ``num_draws``).
+        (e.g. ``num_paths``, ``num_draws``). ``progressbar`` is accepted here
+        for compatibility, but the direct argument is preferred (passing both
+        raises).
 
     Attributes
     ----------
@@ -526,11 +555,13 @@ class PathfinderForecaster(BaseForecaster):
         covariates=None,
         *,
         random_seed=None,
-        progressbar: bool = False,
+        progressbar: bool | None = None,
         pathfinder_kwargs: Mapping | None = None,
     ) -> None:
-        self._progressbar = progressbar
         self._pathfinder_kwargs = dict(pathfinder_kwargs or {})
+        self._progressbar = _resolve_progressbar(
+            progressbar, self._pathfinder_kwargs, "pathfinder_kwargs"
+        )
         super().__init__(model_fn, data, covariates, random_seed=random_seed)
 
     def _fit(self, random_seed) -> None:
@@ -538,12 +569,11 @@ class PathfinderForecaster(BaseForecaster):
             from pymc_extras import fit_pathfinder
         except ImportError as err:
             raise OptionalDependencyError("pymc-extras", "extras", "PathfinderForecaster") from err
-        pathfinder_kwargs = dict(self._pathfinder_kwargs)
         self.idata = fit_pathfinder(
             model=self.model,
             random_seed=random_seed,
-            progressbar=pathfinder_kwargs.pop("progressbar", self._progressbar),
-            **pathfinder_kwargs,
+            progressbar=self._progressbar,
+            **self._pathfinder_kwargs,
         )
 
     def _draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:

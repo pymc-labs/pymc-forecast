@@ -14,7 +14,7 @@ one predictive group:
 | Producer | Group | Contents |
 |---|---|---|
 | `forecast(...)` | `predictions` | out-of-sample forecasts |
-| `predict_in_sample(...)` | `posterior_predictive` | in-sample predictive of the observed variable |
+| `predict_in_sample(...)` | `posterior_predictive` | in-sample predictive of the observed variable, plus its latent predictor |
 
 The group names follow the ArviZ convention (out-of-sample predictions live in
 `predictions`). {func}`pymc_forecast.prediction_samples` extracts the samples

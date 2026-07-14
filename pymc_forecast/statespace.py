@@ -181,7 +181,9 @@ class StatespaceForecaster(HMCForecaster):
     progressbar
         Show the sampling progress bar.
     sample_kwargs
-        Extra keyword arguments for ``pm.sample``.
+        Extra keyword arguments for ``pm.sample``. ``progressbar`` is
+        accepted here for compatibility, but the direct argument is preferred
+        (passing both raises).
     build_kwargs
         Extra keyword arguments for ``build_statespace_graph``, such as
         ``mvn_method`` for the likelihood decomposition.
@@ -212,7 +214,7 @@ class StatespaceForecaster(HMCForecaster):
         chains: int = 2,
         nuts_sampler: str = "pymc",
         random_seed=None,
-        progressbar: bool = False,
+        progressbar: bool | None = None,
         sample_kwargs: Mapping | None = None,
         build_kwargs: Mapping | None = None,
         forecast_kwargs: Mapping | None = None,
