@@ -18,6 +18,7 @@ __all__ = [
     "FUTURE_DIM",
     "TIME_DIM",
     "as_dataarray",
+    "concat_time_index",
     "extend_time_index",
     "null_covariates",
     "validate_alignment",
@@ -156,6 +157,55 @@ def extend_time_index(index, horizon: int):
         step = steps[0]
     future = values[-1] + step * np.arange(1, horizon + 1)
     return pd.Index(np.concatenate([values, future]))
+
+
+def concat_time_index(index, future_index):
+    """Concatenate a training time index with a predict-time future index.
+
+    The future index supplies the forecast horizon at predict time (its length
+    need not be known when the model is fit). Its values must be strictly
+    increasing and lie strictly after the last training value; gaps are
+    allowed — forecast steps are labeled with the supplied coordinates.
+    Returns the full ``observed + future`` index.
+
+    Parameters
+    ----------
+    index
+        Time coordinate values of the training window.
+    future_index
+        Time coordinate values of the forecast horizon.
+
+    Raises
+    ------
+    AlignmentError
+        If the future index is empty, not strictly increasing, does not sort
+        after the training index, or cannot be compared to it.
+    """
+    import pandas as pd
+
+    idx = pd.Index(np.asarray(index))
+    fut = pd.Index(np.asarray(future_index))
+    if len(fut) == 0:
+        msg = "future time index is empty; supply at least one forecast step"
+        raise AlignmentError(msg)
+    if not (fut.is_monotonic_increasing and fut.is_unique):
+        msg = "future time index must be strictly increasing"
+        raise AlignmentError(msg)
+    try:
+        starts_after = len(idx) == 0 or fut[0] > idx[-1]
+    except TypeError as err:
+        msg = (
+            "future time index is not comparable to the training time index "
+            f"({fut.dtype} vs {idx.dtype})"
+        )
+        raise AlignmentError(msg) from err
+    if not starts_after:
+        msg = (
+            "future time index must lie strictly after the training window: "
+            f"got first future value {fut[0]!r} <= last training value {idx[-1]!r}"
+        )
+        raise AlignmentError(msg)
+    return idx.append(fut)
 
 
 def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:

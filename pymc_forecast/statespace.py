@@ -33,6 +33,7 @@ from pymc_forecast.data import (
     FUTURE_DIM,
     TIME_DIM,
     as_dataarray,
+    concat_time_index,
     extend_time_index,
     null_covariates,
     validate_alignment,
@@ -302,7 +303,7 @@ class StatespaceForecaster(HMCForecaster):
         if len(feature_dims) != 1 or future_covariates.sizes[feature_dims[0]] == 0:
             msg = (
                 f"the statespace model needs future values for {data_names[0]!r}: "
-                "pass full-horizon covariates instead of horizon="
+                "pass full-horizon covariates instead of horizon=/future_index="
             )
             raise AlignmentError(msg)
         return np.asarray(future_covariates.transpose(TIME_DIM, ...).values)
@@ -313,16 +314,22 @@ class StatespaceForecaster(HMCForecaster):
         num_samples: int = 100,
         *,
         horizon: int | None = None,
+        future_index=None,
         var_names: Sequence[str] | None = None,
         random_seed=None,
         progressbar: bool = False,
     ) -> xr.DataTree:
         """Sample forecasts beyond the training window.
 
-        Provide the horizon in one of two ways: pass ``covariates`` spanning
-        the training window plus the forecast steps, or — for a model without
-        exogenous inputs — pass ``horizon=N`` to forecast ``N`` steps past the
-        training data (its time coord is extended at the inferred spacing).
+        The horizon is supplied at forecast time, in one of three mutually
+        exclusive ways: pass ``covariates`` spanning the training window plus
+        the forecast steps, or — for a model without exogenous inputs — pass
+        ``horizon=N`` to forecast ``N`` steps past the training data (its time
+        coord is extended at the inferred spacing) or ``future_index=`` to
+        forecast over an arbitrary later time index (strictly increasing
+        values lying after the training window; the horizon length is derived
+        from it). Forecast steps are always iterated consecutively from the
+        end of training and labeled with the supplied coordinates.
 
         The forecast draws the terminal state from its smoothed posterior and
         iterates the statespace forward — the Kalman analogue of the core
@@ -334,13 +341,14 @@ class StatespaceForecaster(HMCForecaster):
         ----------
         covariates
             Covariates spanning training window + forecast horizon (time
-            coords must extend the training data's). Mutually exclusive with
-            ``horizon``.
+            coords must extend the training data's).
         num_samples
             Number of posterior draws (and forecast samples).
         horizon
-            Number of steps to forecast past the training data. Mutually
-            exclusive with ``covariates``.
+            Number of steps to forecast past the training data.
+        future_index
+            Time coordinate values of the forecast horizon, supplied at
+            forecast time (models without exogenous inputs only).
         var_names
             Subset of prediction variables to keep (``"forecast"``,
             ``"forecast_latent"``). Default: both.
@@ -354,12 +362,16 @@ class StatespaceForecaster(HMCForecaster):
             ``(chain, draw, time_future, ...)``) and the latent state
             trajectories as ``"forecast_latent"``.
         """
-        if (covariates is None) == (horizon is None):
-            msg = "pass exactly one of covariates or horizon"
+        provided = sum(arg is not None for arg in (covariates, horizon, future_index))
+        if provided != 1:
+            msg = "pass exactly one of covariates, horizon, or future_index"
             raise ValueError(msg)
         t_obs = self._data.sizes[TIME_DIM]
         if horizon is not None:
             full_index = extend_time_index(self._data[TIME_DIM].values, horizon)
+            cov = null_covariates(np.asarray(full_index))
+        elif future_index is not None:
+            full_index = concat_time_index(self._data[TIME_DIM].values, future_index)
             cov = null_covariates(np.asarray(full_index))
         else:
             cov = as_dataarray(covariates, role="covariates")

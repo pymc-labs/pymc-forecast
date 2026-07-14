@@ -5,6 +5,7 @@ import xarray as xr
 
 from pymc_forecast.data import (
     as_dataarray,
+    concat_time_index,
     extend_time_index,
     null_covariates,
     validate_alignment,
@@ -108,3 +109,35 @@ class TestValidateAlignment:
         cov = as_dataarray(np.zeros((5, 1)), role="covariates")
         with pytest.raises(AlignmentError, match="misaligned"):
             validate_alignment(data, cov)
+
+
+class TestConcatTimeIndex:
+    def test_numeric_gap_allowed(self):
+        full = concat_time_index(np.arange(5), [10, 20, 30])
+        np.testing.assert_array_equal(full, [0, 1, 2, 3, 4, 10, 20, 30])
+
+    def test_datetime(self):
+        train = pd.date_range("2024-01-01", periods=4, freq="D")
+        future = pd.date_range("2024-02-01", periods=2, freq="D")
+        full = concat_time_index(train, future)
+        assert len(full) == 6
+        assert full[-1] == pd.Timestamp("2024-02-02")
+
+    def test_empty_future_rejected(self):
+        with pytest.raises(AlignmentError, match="empty"):
+            concat_time_index(np.arange(5), [])
+
+    def test_not_increasing_rejected(self):
+        with pytest.raises(AlignmentError, match="strictly increasing"):
+            concat_time_index(np.arange(5), [7, 6])
+        with pytest.raises(AlignmentError, match="strictly increasing"):
+            concat_time_index(np.arange(5), [7, 7])
+
+    def test_overlap_with_training_rejected(self):
+        with pytest.raises(AlignmentError, match="strictly after"):
+            concat_time_index(np.arange(5), [4, 5, 6])
+
+    def test_incomparable_types_rejected(self):
+        train = pd.date_range("2024-01-01", periods=3, freq="D")
+        with pytest.raises(AlignmentError, match="not comparable"):
+            concat_time_index(train, [1, 2, 3])
