@@ -6,6 +6,13 @@ run ``pm.sample_posterior_predictive`` over a posterior. Posteriors are
 accepted in any of the shapes the fitting paths produce — an ArviZ
 ``DataTree``/``InferenceData`` with a ``posterior`` group, or a bare posterior
 ``Dataset``.
+
+Prediction outputs are draw-level by contract: every variable in the
+``predictions`` (out-of-sample) and ``posterior_predictive`` (in-sample)
+groups carries ``chain``/``draw`` dims with the full posterior-predictive
+samples — nothing is reduced to means or quantiles on the default path.
+:func:`prediction_samples` extracts that samples ``Dataset`` from any result
+shape the drivers produce.
 """
 
 from collections.abc import Sequence
@@ -18,7 +25,49 @@ from pymc_forecast.data import TIME_DIM, as_dataarray, null_covariates
 from pymc_forecast.exceptions import HorizonError
 from pymc_forecast.model import FORECAST_VAR, OBS_VAR, build_model
 
-__all__ = ["forecast", "posterior_dataset", "predict_in_sample", "thin_draws"]
+__all__ = [
+    "forecast",
+    "posterior_dataset",
+    "predict_in_sample",
+    "prediction_samples",
+    "thin_draws",
+]
+
+PREDICTIVE_GROUPS = ("predictions", "posterior_predictive")
+"""Result groups holding draw-level predictive samples, in lookup order."""
+
+
+def prediction_samples(result) -> xr.Dataset:
+    """Extract the draw-level predictive samples from a prediction result.
+
+    Accepts any result shape the predictive drivers produce — an ArviZ
+    ``DataTree`` / ``InferenceData`` with a ``predictions`` group (from
+    :func:`forecast`) or a ``posterior_predictive`` group (from
+    :func:`predict_in_sample`) — or a bare ``Dataset`` (returned unchanged),
+    and returns the samples as an ``xarray.Dataset`` whose variables retain
+    the full ``chain`` / ``draw`` dims. Point summaries are the caller's
+    choice, e.g. ``prediction_samples(result)["forecast"].mean(("chain",
+    "draw"))``.
+
+    Raises
+    ------
+    TypeError
+        If ``result`` carries none of the predictive groups.
+    """
+    if isinstance(result, xr.Dataset):
+        return result
+    for group in PREDICTIVE_GROUPS:
+        try:
+            ds = result[group]
+        except (KeyError, TypeError, IndexError):
+            ds = getattr(result, group, None)
+        if ds is not None:
+            return ds.to_dataset() if hasattr(ds, "to_dataset") else ds
+    msg = (
+        f"cannot extract prediction samples from {type(result).__name__}: "
+        f"no {' or '.join(repr(g) for g in PREDICTIVE_GROUPS)} group"
+    )
+    raise TypeError(msg)
 
 
 def posterior_dataset(posterior) -> xr.Dataset:

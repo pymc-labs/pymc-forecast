@@ -56,6 +56,7 @@ from pymc_forecast.model import (
 from pymc_forecast.prediction import (
     forecast,
     predict_in_sample,
+    prediction_samples,
     thin_draws,
 )
 from pymc_forecast.statespace import StatespaceForecaster, StatespaceModel
@@ -104,6 +105,7 @@ __all__ = [
     "predict",
     "predict_in_sample",
     "predict_mvn",
+    "prediction_samples",
     "results_to_dataframe",
     "thin_draws",
     "time_series",

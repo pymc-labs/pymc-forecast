@@ -116,6 +116,16 @@ class TestForecast:
         posterior = forecaster.draw_posterior(17, random_seed=SEED)
         assert posterior.sizes["chain"] == 1 and posterior.sizes["draw"] == 17
 
+    def test_prediction_samples_extracts_statespace_draws(self, forecaster):
+        from pymc_forecast.prediction import prediction_samples
+
+        tree = forecaster.forecast(horizon=3, num_samples=10, random_seed=SEED)
+        ds = prediction_samples(tree)
+        assert ds["forecast"].dims == ("chain", "draw", "time_future")
+        in_sample = prediction_samples(forecaster.predict_in_sample(num_samples=10))
+        assert ds["forecast"].sizes["draw"] == 10
+        assert in_sample["obs"].dims == ("chain", "draw", "time")
+
     def test_is_an_hmc_forecaster(self, forecaster):
         # not just duck-typed: fit and draw_posterior are inherited
         assert isinstance(forecaster, HMCForecaster)
