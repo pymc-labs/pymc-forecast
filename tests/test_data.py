@@ -4,6 +4,7 @@ import pytest
 import xarray as xr
 
 from pymc_forecast.data import (
+    append_future_covariates,
     as_dataarray,
     extend_time_index,
     null_covariates,
@@ -62,6 +63,35 @@ class TestNullCovariates:
         assert da.shape == (6, 0)
         assert da.dims == ("time", "covariate")
         np.testing.assert_array_equal(da["time"].values, idx.values)
+
+
+class TestAppendFutureCovariates:
+    def test_appends_rows_and_preserves_feature_coords(self):
+        training = xr.DataArray(
+            np.ones((3, 2)),
+            dims=("time", "covariate"),
+            coords={"time": [0, 1, 2], "covariate": ["a", "b"]},
+        )
+        future = xr.DataArray(
+            np.zeros((2, 2)),
+            dims=("time", "covariate"),
+            coords={"time": [10, 20], "covariate": ["a", "b"]},
+        )
+        result = append_future_covariates(training, future)
+        np.testing.assert_array_equal(result["time"], [0, 1, 2, 10, 20])
+        np.testing.assert_array_equal(result["covariate"], ["a", "b"])
+
+    def test_rejects_mismatched_features(self):
+        training = pd.DataFrame({"a": [1.0], "b": [2.0]}, index=[0])
+        future = pd.DataFrame({"b": [3.0], "a": [4.0]}, index=[1])
+        with pytest.raises(AlignmentError, match="coordinate 'covariate'"):
+            append_future_covariates(training, future)
+
+    def test_rejects_overlapping_time(self):
+        training = pd.DataFrame({"a": [1.0, 2.0]}, index=[0, 1])
+        future = pd.DataFrame({"a": [3.0]}, index=[1])
+        with pytest.raises(AlignmentError, match="must not overlap"):
+            append_future_covariates(training, future)
 
 
 class TestExtendTimeIndex:

@@ -13,7 +13,13 @@ from collections.abc import Mapping
 import pymc as pm
 import xarray as xr
 
-from pymc_forecast.data import TIME_DIM, as_dataarray, extend_time_index, null_covariates
+from pymc_forecast.data import (
+    TIME_DIM,
+    append_future_covariates,
+    as_dataarray,
+    extend_time_index,
+    null_covariates,
+)
 from pymc_forecast.exceptions import MethodResolutionError, OptionalDependencyError
 from pymc_forecast.model import build_model
 from pymc_forecast.prediction import (
@@ -80,6 +86,7 @@ class BaseForecaster(abc.ABC):
         covariates=None,
         num_samples: int = 100,
         *,
+        future_covariates=None,
         horizon: int | None = None,
         var_names=None,
         random_seed=None,
@@ -87,22 +94,25 @@ class BaseForecaster(abc.ABC):
     ):
         """Sample forecasts beyond the training window.
 
-        Provide the horizon in one of two ways: pass ``covariates`` spanning
-        the training window plus the forecast steps, or — for a covariate-free
-        model — pass ``horizon=N`` to forecast ``N`` steps past the training
-        data (its time coord is extended at the inferred spacing).
+        Provide the horizon in one of three ways: pass ``future_covariates``
+        containing only predict-time rows, pass ``covariates`` spanning the
+        training window plus forecast steps, or — for a covariate-free model —
+        pass ``horizon=N``. Future-only frames are appended to the covariates
+        retained from fitting after their feature dimensions are validated.
 
         Parameters
         ----------
         covariates
             Covariates spanning training window + forecast horizon (time coords
-            must extend the training data's). Mutually exclusive with
-            ``horizon``.
+            must extend the training data's).
+        future_covariates
+            Covariates for only the requested forecast rows. Their non-time
+            dimensions and coordinates must match the training covariates.
         num_samples
             Number of posterior draws (and forecast samples).
         horizon
             Number of steps to forecast past the training data (covariate-free
-            models only). Mutually exclusive with ``covariates``.
+            models only).
         var_names, random_seed, progressbar
             Passed through to :func:`pymc_forecast.prediction.forecast`.
 
@@ -111,10 +121,13 @@ class BaseForecaster(abc.ABC):
         DataTree
             With a ``predictions`` group carrying ``time_future`` coords.
         """
-        if (covariates is None) == (horizon is None):
-            msg = "pass exactly one of covariates or horizon"
+        provided = sum(value is not None for value in (covariates, future_covariates, horizon))
+        if provided != 1:
+            msg = "pass exactly one of covariates, future_covariates, or horizon"
             raise ValueError(msg)
-        if horizon is not None:
+        if future_covariates is not None:
+            covariates = append_future_covariates(self._covariates, future_covariates)
+        elif horizon is not None:
             full_index = extend_time_index(self._data[TIME_DIM].values, horizon)
             covariates = null_covariates(full_index)
         posterior = self.draw_posterior(num_samples, random_seed)

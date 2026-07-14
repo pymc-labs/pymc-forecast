@@ -153,6 +153,18 @@ class TestRegressionCovariates:
         np.testing.assert_array_equal(fc["time_future"].values, cov["time"].values[20:])
         assert np.isfinite(fc.values).all()
 
+    def test_future_only_covariates_flow_through(self, regression_forecaster):
+        forecaster, _, cov = regression_forecaster
+        future_covariates = cov.isel(time=slice(20, None))
+        tree = forecaster.forecast(
+            future_covariates=future_covariates,
+            num_samples=20,
+            random_seed=SEED,
+        )
+        fc = tree["predictions"]["forecast"]
+        np.testing.assert_array_equal(fc["time_future"], future_covariates["time"])
+        assert np.isfinite(fc.values).all()
+
     def test_horizon_shortcut_rejected_without_future_values(self, regression_forecaster):
         forecaster, _, _ = regression_forecaster
         with pytest.raises(AlignmentError, match="needs future values"):

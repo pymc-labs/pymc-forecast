@@ -8,6 +8,7 @@ results, and inference via PyMC core and pymc-extras.
 from pymc_forecast.data import (
     FUTURE_DIM,
     TIME_DIM,
+    append_future_covariates,
     as_dataarray,
     extend_time_index,
     null_covariates,
@@ -80,6 +81,7 @@ __all__ = [
     "StatespaceForecaster",
     "StatespaceModel",
     "__version__",
+    "append_future_covariates",
     "as_dataarray",
     "backtest",
     "build_model",

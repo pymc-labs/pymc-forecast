@@ -32,6 +32,20 @@ class TestForecasterVI:
             pred["forecast"].mean(("chain", "draw")).values, truth, atol=0.25
         )
 
+    def test_future_only_covariates_condition_forecast(self, fc):
+        _, cov = make_trend_data()
+        future_covariates = cov.isel(time=slice(30, None))
+        pred = fc.forecast(
+            future_covariates=future_covariates,
+            num_samples=200,
+            random_seed=SEED,
+        )["predictions"]
+        truth = 1.0 + 2.0 * future_covariates.values[:, 0]
+        np.testing.assert_allclose(
+            pred["forecast"].mean(("chain", "draw")).values, truth, atol=0.25
+        )
+        np.testing.assert_array_equal(pred["time_future"], future_covariates["time"])
+
     def test_predict_in_sample(self, fc):
         data, _ = make_trend_data()
         ppc = fc.predict_in_sample(num_samples=100, random_seed=SEED)
@@ -86,6 +100,8 @@ class TestForecastByHorizon:
             fc.forecast(cov, horizon=5)
         with pytest.raises(ValueError, match="exactly one"):
             fc.forecast()
+        with pytest.raises(ValueError, match="exactly one"):
+            fc.forecast(cov, future_covariates=cov.isel(time=slice(40, None)))
 
 
 class TestHMCForecaster:

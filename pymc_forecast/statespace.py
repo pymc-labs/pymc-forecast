@@ -32,6 +32,7 @@ import xarray as xr
 from pymc_forecast.data import (
     FUTURE_DIM,
     TIME_DIM,
+    append_future_covariates,
     as_dataarray,
     extend_time_index,
     null_covariates,
@@ -312,6 +313,7 @@ class StatespaceForecaster(HMCForecaster):
         covariates=None,
         num_samples: int = 100,
         *,
+        future_covariates=None,
         horizon: int | None = None,
         var_names: Sequence[str] | None = None,
         random_seed=None,
@@ -319,10 +321,9 @@ class StatespaceForecaster(HMCForecaster):
     ) -> xr.DataTree:
         """Sample forecasts beyond the training window.
 
-        Provide the horizon in one of two ways: pass ``covariates`` spanning
-        the training window plus the forecast steps, or — for a model without
-        exogenous inputs — pass ``horizon=N`` to forecast ``N`` steps past the
-        training data (its time coord is extended at the inferred spacing).
+        Provide the horizon with future-only ``future_covariates``, with
+        full-horizon ``covariates``, or — for a model without exogenous inputs
+        — with ``horizon=N``.
 
         The forecast draws the terminal state from its smoothed posterior and
         iterates the statespace forward — the Kalman analogue of the core
@@ -336,6 +337,9 @@ class StatespaceForecaster(HMCForecaster):
             Covariates spanning training window + forecast horizon (time
             coords must extend the training data's). Mutually exclusive with
             ``horizon``.
+        future_covariates
+            Covariates for only the forecast rows. Their feature dimensions
+            and coordinates must match the training covariates.
         num_samples
             Number of posterior draws (and forecast samples).
         horizon
@@ -354,11 +358,14 @@ class StatespaceForecaster(HMCForecaster):
             ``(chain, draw, time_future, ...)``) and the latent state
             trajectories as ``"forecast_latent"``.
         """
-        if (covariates is None) == (horizon is None):
-            msg = "pass exactly one of covariates or horizon"
+        provided = sum(value is not None for value in (covariates, future_covariates, horizon))
+        if provided != 1:
+            msg = "pass exactly one of covariates, future_covariates, or horizon"
             raise ValueError(msg)
         t_obs = self._data.sizes[TIME_DIM]
-        if horizon is not None:
+        if future_covariates is not None:
+            cov = append_future_covariates(self._covariates, future_covariates)
+        elif horizon is not None:
             full_index = extend_time_index(self._data[TIME_DIM].values, horizon)
             cov = null_covariates(np.asarray(full_index))
         else:
