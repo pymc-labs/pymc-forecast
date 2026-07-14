@@ -5,6 +5,7 @@ import xarray as xr
 
 from pymc_forecast.data import (
     as_dataarray,
+    concat_covariates,
     concat_time_index,
     extend_time_index,
     null_covariates,
@@ -141,3 +142,63 @@ class TestConcatTimeIndex:
         train = pd.date_range("2024-01-01", periods=3, freq="D")
         with pytest.raises(AlignmentError, match="not comparable"):
             concat_time_index(train, [1, 2, 3])
+
+
+class TestConcatCovariates:
+    def _train_cov(self):
+        return as_dataarray(
+            xr.DataArray(
+                np.zeros((5, 2)),
+                dims=("time", "covariate"),
+                coords={"time": np.arange(5), "covariate": ["a", "b"]},
+            ),
+            role="covariates",
+        )
+
+    def test_appends_future_rows(self):
+        fut = xr.DataArray(
+            np.ones((3, 2)),
+            dims=("time", "covariate"),
+            coords={"time": [5, 6, 7], "covariate": ["a", "b"]},
+        )
+        full = concat_covariates(self._train_cov(), fut)
+        assert full.sizes == {"time": 8, "covariate": 2}
+        np.testing.assert_array_equal(full["time"].values, np.arange(8))
+        np.testing.assert_array_equal(full.values[5:], np.ones((3, 2)))
+
+    def test_dataframe_input_normalized(self):
+        pdf = pd.DataFrame(np.ones((2, 2)), index=[5, 6], columns=["a", "b"])
+        full = concat_covariates(self._train_cov(), pdf)
+        assert full.sizes["time"] == 7
+
+    def test_mismatched_names_rejected(self):
+        fut = xr.DataArray(
+            np.ones((2, 2)),
+            dims=("time", "covariate"),
+            coords={"time": [5, 6], "covariate": ["b", "a"]},
+        )
+        with pytest.raises(AlignmentError, match="coords must match"):
+            concat_covariates(self._train_cov(), fut)
+
+    def test_mismatched_width_rejected(self):
+        fut = xr.DataArray(
+            np.ones((2, 1)),
+            dims=("time", "covariate"),
+            coords={"time": [5, 6], "covariate": ["a"]},
+        )
+        with pytest.raises(AlignmentError, match="size mismatch"):
+            concat_covariates(self._train_cov(), fut)
+
+    def test_mismatched_dims_rejected(self):
+        fut = xr.DataArray(np.ones(2), dims=("time",), coords={"time": [5, 6]})
+        with pytest.raises(AlignmentError, match="same dims"):
+            concat_covariates(self._train_cov(), fut)
+
+    def test_overlapping_time_rejected(self):
+        fut = xr.DataArray(
+            np.ones((2, 2)),
+            dims=("time", "covariate"),
+            coords={"time": [4, 5], "covariate": ["a", "b"]},
+        )
+        with pytest.raises(AlignmentError, match="strictly after"):
+            concat_covariates(self._train_cov(), fut)

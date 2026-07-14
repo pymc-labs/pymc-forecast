@@ -178,6 +178,19 @@ class TestRegressionCovariates:
         with pytest.raises(AlignmentError, match="needs future values"):
             forecaster.forecast(future_index=[100, 200], num_samples=10)
 
+    def test_future_only_covariates(self, regression_forecaster):
+        forecaster, _, cov = regression_forecaster
+        future_cov = cov.isel(time=slice(20, None))
+        tree = forecaster.forecast(future_covariates=future_cov, num_samples=20, random_seed=SEED)
+        by_full = forecaster.forecast(cov, num_samples=20, random_seed=SEED)
+        np.testing.assert_allclose(
+            tree["predictions"]["forecast"].values,
+            by_full["predictions"]["forecast"].values,
+        )
+        np.testing.assert_array_equal(
+            tree["predictions"]["forecast"]["time_future"].values, cov["time"].values[20:]
+        )
+
 
 class TestConstructionValidation:
     """Bad inputs fail before the (expensive) MCMC fit."""

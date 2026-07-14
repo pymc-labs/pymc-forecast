@@ -33,6 +33,7 @@ from pymc_forecast.data import (
     FUTURE_DIM,
     TIME_DIM,
     as_dataarray,
+    concat_covariates,
     concat_time_index,
     extend_time_index,
     null_covariates,
@@ -315,21 +316,23 @@ class StatespaceForecaster(HMCForecaster):
         *,
         horizon: int | None = None,
         future_index=None,
+        future_covariates=None,
         var_names: Sequence[str] | None = None,
         random_seed=None,
         progressbar: bool = False,
     ) -> xr.DataTree:
         """Sample forecasts beyond the training window.
 
-        The horizon is supplied at forecast time, in one of three mutually
+        The horizon is supplied at forecast time, in one of four mutually
         exclusive ways: pass ``covariates`` spanning the training window plus
-        the forecast steps, or — for a model without exogenous inputs — pass
-        ``horizon=N`` to forecast ``N`` steps past the training data (its time
-        coord is extended at the inferred spacing) or ``future_index=`` to
-        forecast over an arbitrary later time index (strictly increasing
-        values lying after the training window; the horizon length is derived
-        from it). Forecast steps are always iterated consecutively from the
-        end of training and labeled with the supplied coordinates.
+        the forecast steps, ``future_covariates`` covering only the forecast
+        steps, or — for a model without exogenous inputs — pass ``horizon=N``
+        to forecast ``N`` steps past the training data (its time coord is
+        extended at the inferred spacing) or ``future_index=`` to forecast
+        over an arbitrary later time index (strictly increasing values lying
+        after the training window; the horizon length is derived from it).
+        Forecast steps are always iterated consecutively from the end of
+        training and labeled with the supplied coordinates.
 
         The forecast draws the terminal state from its smoothed posterior and
         iterates the statespace forward — the Kalman analogue of the core
@@ -349,6 +352,11 @@ class StatespaceForecaster(HMCForecaster):
         future_index
             Time coordinate values of the forecast horizon, supplied at
             forecast time (models without exogenous inputs only).
+        future_covariates
+            Covariates covering only the forecast horizon, with a time index
+            lying after the training window; fed through as the forecast
+            scenario. Structure (dims, covariate names and order) must match
+            the training covariates.
         var_names
             Subset of prediction variables to keep (``"forecast"``,
             ``"forecast_latent"``). Default: both.
@@ -362,9 +370,11 @@ class StatespaceForecaster(HMCForecaster):
             ``(chain, draw, time_future, ...)``) and the latent state
             trajectories as ``"forecast_latent"``.
         """
-        provided = sum(arg is not None for arg in (covariates, horizon, future_index))
+        provided = sum(
+            arg is not None for arg in (covariates, horizon, future_index, future_covariates)
+        )
         if provided != 1:
-            msg = "pass exactly one of covariates, horizon, or future_index"
+            msg = "pass exactly one of covariates, horizon, future_index, or future_covariates"
             raise ValueError(msg)
         t_obs = self._data.sizes[TIME_DIM]
         if horizon is not None:
@@ -373,6 +383,8 @@ class StatespaceForecaster(HMCForecaster):
         elif future_index is not None:
             full_index = concat_time_index(self._data[TIME_DIM].values, future_index)
             cov = null_covariates(np.asarray(full_index))
+        elif future_covariates is not None:
+            cov = concat_covariates(self._covariates, future_covariates)
         else:
             cov = as_dataarray(covariates, role="covariates")
             validate_alignment(self._data, cov)
