@@ -15,13 +15,25 @@ import xarray as xr
 from pymc_forecast.exceptions import AlignmentError
 
 __all__ = [
+    "CHAIN_DIM",
+    "DRAW_DIM",
     "FUTURE_DIM",
+    "SAMPLE_DIMS",
     "TIME_DIM",
     "as_dataarray",
     "extend_time_index",
     "null_covariates",
     "validate_alignment",
 ]
+
+CHAIN_DIM = "chain"
+"""First posterior-sample dim on every prediction output."""
+
+DRAW_DIM = "draw"
+"""Second posterior-sample dim on every prediction output."""
+
+SAMPLE_DIMS = (CHAIN_DIM, DRAW_DIM)
+"""The ordered sample dims guaranteed to lead every prediction output."""
 
 TIME_DIM = "time"
 """Dim name of the observed (in-sample) time dimension."""

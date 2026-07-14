@@ -37,7 +37,10 @@ Every predictive variable carries, in order:
 
 1. **Sample dims** `("chain", "draw")` — always both, always leading, holding
    the full draw-level posterior-predictive samples (no reduction to means or
-   quantiles happens on the default path).
+   quantiles happens on the default path). Exported as
+   {data}`pymc_forecast.CHAIN_DIM`, {data}`pymc_forecast.DRAW_DIM`, and the
+   ordered pair {data}`pymc_forecast.SAMPLE_DIMS`; the metrics layer
+   recognizes sample dims through the same constants.
 2. **A time dim** — `"time"` ({data}`pymc_forecast.TIME_DIM`) on in-sample
    variables, `"time_future"` ({data}`pymc_forecast.FUTURE_DIM`) on forecast
    variables. Its coordinate values are real: whatever time index the inputs

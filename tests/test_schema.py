@@ -23,6 +23,9 @@ def test_public_name_constants():
     assert pymc_forecast.FUTURE_DIM == "time_future"
     assert pymc_forecast.OBS_VAR == "obs"
     assert pymc_forecast.FORECAST_VAR == "forecast"
+    assert pymc_forecast.CHAIN_DIM == "chain"
+    assert pymc_forecast.DRAW_DIM == "draw"
+    assert pymc_forecast.SAMPLE_DIMS == ("chain", "draw")
 
 
 @pytest.fixture(scope="module")

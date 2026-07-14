@@ -11,8 +11,9 @@ breaking change, made only in a minor release and called out here.
 - The prediction output schema (dims `chain`/`draw`/`time`/`time_future`,
   groups `predictions`/`posterior_predictive`, variables `obs`/`forecast`/
   `{name}_future`) is now documented and covered by contract tests; the
-  variable-name constants `OBS_VAR` and `FORECAST_VAR` are exported at the
-  package level ([#21](https://github.com/pymc-labs/pymc_forecast/issues/21)).
+  name constants `OBS_VAR`, `FORECAST_VAR`, `CHAIN_DIM`, `DRAW_DIM`, and
+  `SAMPLE_DIMS` are exported at the package level
+  ([#21](https://github.com/pymc-labs/pymc_forecast/issues/21)).
 
 ## 0.0.1 (2026-07-10)
 
