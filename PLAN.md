@@ -1,6 +1,6 @@
 # Porting `numpyro_forecast` to PyMC
 
-Design and porting plan for building `pymc_forecast` from
+Design and porting plan for building PyMC-Forecast (`pymc_forecast`) from
 [juanitorduz/numpyro_forecast](https://github.com/juanitorduz/numpyro_forecast)
 (itself a JAX/NumPyro port of Pyro's `pyro.contrib.forecast`).
 
@@ -10,7 +10,7 @@ results instead of raw arrays, and pymc-extras for Pathfinder and state-space
 models. No API or layout compatibility with the NumPyro version is kept.
 
 The actionable roadmap lives in the
-[issue tracker](https://github.com/pymc-labs/pymc_forecast/issues); this document
+[issue tracker](https://github.com/pymc-labs/pymc-forecast/issues); this document
 records the source-package analysis and the concept mapping behind those issues.
 
 ## What the source package is

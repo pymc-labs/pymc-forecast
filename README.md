@@ -1,7 +1,7 @@
-# pymc_forecast
+# PyMC-Forecast
 
-[![CI](https://github.com/pymc-labs/pymc_forecast/actions/workflows/ci.yml/badge.svg)](https://github.com/pymc-labs/pymc_forecast/actions/workflows/ci.yml)
-[![Docs](https://github.com/pymc-labs/pymc_forecast/actions/workflows/docs.yml/badge.svg)](https://pymc-labs.github.io/pymc_forecast/)
+[![CI](https://github.com/pymc-labs/pymc-forecast/actions/workflows/ci.yml/badge.svg)](https://github.com/pymc-labs/pymc-forecast/actions/workflows/ci.yml)
+[![Docs](https://github.com/pymc-labs/pymc-forecast/actions/workflows/docs.yml/badge.svg)](https://pymc-labs.github.io/pymc-forecast/)
 
 Bayesian time-series forecasting with [PyMC](https://www.pymc.io): you write the
 generative model; the package handles the train/forecast plumbing, inference,
@@ -13,9 +13,9 @@ rather than a 1:1 translation.
 
 > **Status: early development.** The design and roadmap live in
 > [PLAN.md](PLAN.md) and the
-> [issue tracker](https://github.com/pymc-labs/pymc_forecast/issues).
+> [issue tracker](https://github.com/pymc-labs/pymc-forecast/issues).
 
-**Documentation:** <https://pymc-labs.github.io/pymc_forecast/> — API reference and
+**Documentation:** <https://pymc-labs.github.io/pymc-forecast/> — API reference and
 executed example notebooks (univariate, hierarchical, covariates, state-space).
 
 ## Quickstart
