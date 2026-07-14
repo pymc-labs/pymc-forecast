@@ -83,6 +83,13 @@ class TestForecast:
             tree["predictions"]["forecast"]["time_future"].values, np.arange(25, 29)
         )
 
+    def test_future_index_stamps_arbitrary_labels(self, forecaster):
+        future_index = np.array([100, 105, 1000])
+        tree = forecaster.forecast(future_index=future_index, num_samples=10, random_seed=SEED)
+        np.testing.assert_array_equal(
+            tree["predictions"]["forecast"]["time_future"].values, future_index
+        )
+
     def test_covariates_and_horizon_mutually_exclusive(self, forecaster, data_and_cov):
         _, cov = data_and_cov
         with pytest.raises(ValueError, match="exactly one"):
@@ -165,6 +172,11 @@ class TestRegressionCovariates:
         forecaster, _, _ = regression_forecaster
         with pytest.raises(AlignmentError, match="needs future values"):
             forecaster.forecast(horizon=3, num_samples=10)
+
+    def test_future_index_rejected_without_future_values(self, regression_forecaster):
+        forecaster, _, _ = regression_forecaster
+        with pytest.raises(AlignmentError, match="needs future values"):
+            forecaster.forecast(future_index=[100, 200], num_samples=10)
 
 
 class TestConstructionValidation:
