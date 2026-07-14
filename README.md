@@ -44,6 +44,8 @@ def model(h, covariates):
 fc = Forecaster(model, train, num_steps=5_000, random_seed=0)   # ADVI
 idata = fc.forecast(horizon=8, num_samples=500, random_seed=0)
 forecast = idata["predictions"]["forecast"]     # dims: (chain, draw, time_future)
+# Outputs stay draw-level (never reduced to means/quantiles); prediction_samples(idata)
+# extracts the samples Dataset from a forecast or in-sample result alike.
 
 # score against the held-out weeks (aligned by dim name, not axis position)
 truth = test.to_xarray().rename({"index": "time_future"})
