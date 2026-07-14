@@ -1,6 +1,6 @@
 [project]
 name = "pymc-forecast"
-version = "0.0.1"
+version = "0.1.0"
 description = "Bayesian time-series forecasting with PyMC: train/forecast plumbing, backtesting, and metrics."
 readme = "README.md"
 requires-python = ">=3.11"
