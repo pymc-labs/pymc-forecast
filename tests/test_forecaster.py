@@ -8,7 +8,7 @@ from example_models import (
     random_walk_model,
 )
 
-from pymc_forecast.exceptions import MethodResolutionError
+from pymc_forecast.exceptions import AlignmentError, MethodResolutionError
 from pymc_forecast.forecaster import Forecaster, HMCForecaster, PathfinderForecaster
 
 SEED = 4242
@@ -85,7 +85,43 @@ class TestForecastByHorizon:
         with pytest.raises(ValueError, match="exactly one"):
             fc.forecast(cov, horizon=5)
         with pytest.raises(ValueError, match="exactly one"):
+            fc.forecast(horizon=5, future_index=[40, 41])
+        with pytest.raises(ValueError, match="exactly one"):
             fc.forecast()
+
+
+class TestForecastByFutureIndex:
+    """Horizon-agnostic predict: the future index is supplied at forecast time."""
+
+    @pytest.fixture(scope="class")
+    def fc(self):
+        data, _ = make_random_walk_data(t_obs=40, horizon=0)
+        return Forecaster(random_walk_model, data, num_steps=4_000, random_seed=SEED)
+
+    def test_future_index_builds_future(self, fc):
+        pred = fc.forecast(future_index=[40, 41, 42], num_samples=100, random_seed=SEED)[
+            "predictions"
+        ]
+        assert pred["forecast"].sizes["time_future"] == 3
+        np.testing.assert_array_equal(pred["time_future"].values, [40, 41, 42])
+
+    def test_arbitrary_later_labels(self, fc):
+        pred = fc.forecast(future_index=[50, 60, 70, 80], num_samples=50, random_seed=SEED)[
+            "predictions"
+        ]
+        np.testing.assert_array_equal(pred["time_future"].values, [50, 60, 70, 80])
+
+    def test_index_overlapping_training_rejected(self, fc):
+        with pytest.raises(AlignmentError, match="strictly after"):
+            fc.forecast(future_index=[39, 40, 41])
+
+    def test_rejected_when_model_has_covariates(self):
+        data, cov = make_trend_data()
+        fc = Forecaster(linear_model, data, cov, num_steps=100, random_seed=SEED)
+        with pytest.raises(AlignmentError, match="fit with covariates"):
+            fc.forecast(future_index=[30, 31])
+        with pytest.raises(AlignmentError, match="fit with covariates"):
+            fc.forecast(horizon=2)
 
 
 class TestHMCForecaster:

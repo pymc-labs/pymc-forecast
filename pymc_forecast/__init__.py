@@ -9,6 +9,7 @@ from pymc_forecast.data import (
     FUTURE_DIM,
     TIME_DIM,
     as_dataarray,
+    concat_time_index,
     extend_time_index,
     null_covariates,
 )
@@ -83,6 +84,7 @@ __all__ = [
     "as_dataarray",
     "backtest",
     "build_model",
+    "concat_time_index",
     "conditional_mvn",
     "crps_empirical",
     "eval_coverage",

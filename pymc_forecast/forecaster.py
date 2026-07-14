@@ -13,8 +13,14 @@ from collections.abc import Mapping
 import pymc as pm
 import xarray as xr
 
-from pymc_forecast.data import TIME_DIM, as_dataarray, extend_time_index, null_covariates
-from pymc_forecast.exceptions import MethodResolutionError, OptionalDependencyError
+from pymc_forecast.data import (
+    TIME_DIM,
+    as_dataarray,
+    concat_time_index,
+    extend_time_index,
+    null_covariates,
+)
+from pymc_forecast.exceptions import AlignmentError, MethodResolutionError, OptionalDependencyError
 from pymc_forecast.model import build_model
 from pymc_forecast.prediction import (
     forecast as _forecast,
@@ -81,28 +87,37 @@ class BaseForecaster(abc.ABC):
         num_samples: int = 100,
         *,
         horizon: int | None = None,
+        future_index=None,
         var_names=None,
         random_seed=None,
         progressbar: bool = False,
     ):
         """Sample forecasts beyond the training window.
 
-        Provide the horizon in one of two ways: pass ``covariates`` spanning
-        the training window plus the forecast steps, or — for a covariate-free
-        model — pass ``horizon=N`` to forecast ``N`` steps past the training
-        data (its time coord is extended at the inferred spacing).
+        The horizon is supplied at forecast time, in one of three mutually
+        exclusive ways: pass ``covariates`` spanning the training window plus
+        the forecast steps, or — for a covariate-free model — pass
+        ``horizon=N`` to forecast ``N`` steps past the training data (its time
+        coord is extended at the inferred spacing) or ``future_index=`` to
+        forecast over an arbitrary later time index.
 
         Parameters
         ----------
         covariates
             Covariates spanning training window + forecast horizon (time coords
-            must extend the training data's). Mutually exclusive with
-            ``horizon``.
+            must extend the training data's).
         num_samples
             Number of posterior draws (and forecast samples).
         horizon
             Number of steps to forecast past the training data (covariate-free
-            models only). Mutually exclusive with ``covariates``.
+            models only).
+        future_index
+            Time coordinate values of the forecast horizon (covariate-free
+            models only): strictly increasing values lying after the training
+            window, e.g. a ``DatetimeIndex`` of the period to predict. The
+            horizon length is derived from it, so it need not be known at fit
+            time. Forecast steps are drawn consecutively and labeled with
+            these coordinates.
         var_names, random_seed, progressbar
             Passed through to :func:`pymc_forecast.prediction.forecast`.
 
@@ -111,11 +126,22 @@ class BaseForecaster(abc.ABC):
         DataTree
             With a ``predictions`` group carrying ``time_future`` coords.
         """
-        if (covariates is None) == (horizon is None):
-            msg = "pass exactly one of covariates or horizon"
+        provided = sum(arg is not None for arg in (covariates, horizon, future_index))
+        if provided != 1:
+            msg = "pass exactly one of covariates, horizon, or future_index"
             raise ValueError(msg)
-        if horizon is not None:
-            full_index = extend_time_index(self._data[TIME_DIM].values, horizon)
+        if horizon is not None or future_index is not None:
+            if self._covariates.size > 0:
+                msg = (
+                    "this model was fit with covariates, so the forecast needs their "
+                    "future values: pass full-horizon covariates= instead of "
+                    "horizon=/future_index="
+                )
+                raise AlignmentError(msg)
+            if horizon is not None:
+                full_index = extend_time_index(self._data[TIME_DIM].values, horizon)
+            else:
+                full_index = concat_time_index(self._data[TIME_DIM].values, future_index)
             covariates = null_covariates(full_index)
         posterior = self.draw_posterior(num_samples, random_seed)
         return _forecast(

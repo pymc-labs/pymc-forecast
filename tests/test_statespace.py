@@ -77,10 +77,18 @@ class TestForecast:
         first_step = tree["predictions"]["forecast"].isel(time_future=0).mean()
         assert abs(float(first_step) - float(data[-1])) < 1.0
 
+    def test_future_index_shortcut(self, forecaster):
+        tree = forecaster.forecast(future_index=[25, 26, 27, 28], num_samples=10, random_seed=SEED)
+        np.testing.assert_array_equal(
+            tree["predictions"]["forecast"]["time_future"].values, np.arange(25, 29)
+        )
+
     def test_covariates_and_horizon_mutually_exclusive(self, forecaster, data_and_cov):
         _, cov = data_and_cov
         with pytest.raises(ValueError, match="exactly one"):
             forecaster.forecast(cov, horizon=3)
+        with pytest.raises(ValueError, match="exactly one"):
+            forecaster.forecast(horizon=3, future_index=[25, 26])
         with pytest.raises(ValueError, match="exactly one"):
             forecaster.forecast()
 
