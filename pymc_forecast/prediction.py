@@ -74,6 +74,26 @@ def _default_var_names(model: pm.Model) -> list[str]:
     return names
 
 
+def _forecast_result_with_both_groups(result):
+    """Expose forecast draws under both ArviZ predictive group conventions.
+
+    PyMC uses ``predictions`` for out-of-sample draws and
+    ``posterior_predictive`` for posterior predictive draws. Forecasts are
+    both, depending on the downstream vocabulary. Keeping a shallow xarray
+    view under each group makes the full chain/draw samples directly
+    consumable by either convention without sampling or reducing twice.
+    """
+    predictions = result["predictions"]
+    dataset = predictions.to_dataset() if hasattr(predictions, "to_dataset") else predictions
+    groups = {
+        "predictions": dataset.copy(deep=False),
+        "posterior_predictive": dataset.copy(deep=False),
+    }
+    if isinstance(result, xr.DataTree):
+        return xr.DataTree.from_dict(groups)
+    return type(result)(**groups)
+
+
 def forecast(
     model_fn,
     posterior,
@@ -116,7 +136,9 @@ def forecast(
     Returns
     -------
     DataTree
-        With a ``predictions`` group carrying ``time_future`` coords.
+        With identical ``predictions`` and ``posterior_predictive`` groups.
+        Both retain the complete ``chain`` / ``draw`` sample dimensions and
+        carry ``time_future`` coords.
     """
     model = build_model(model_fn, data, covariates)
     if FORECAST_VAR not in model.named_vars:
@@ -127,7 +149,7 @@ def forecast(
         raise HorizonError(msg)
     if num_samples is not None:
         posterior = thin_draws(posterior, num_samples, random_seed)
-    return pm.sample_posterior_predictive(
+    result = pm.sample_posterior_predictive(
         posterior_dataset(posterior),
         model=model,
         var_names=list(var_names) if var_names is not None else _default_var_names(model),
@@ -135,6 +157,7 @@ def forecast(
         random_seed=random_seed,
         progressbar=progressbar,
     )
+    return _forecast_result_with_both_groups(result)
 
 
 def predict_in_sample(

@@ -109,7 +109,8 @@ class BaseForecaster(abc.ABC):
         Returns
         -------
         DataTree
-            With a ``predictions`` group carrying ``time_future`` coords.
+            With identical ``predictions`` and ``posterior_predictive``
+            groups carrying the full draws and ``time_future`` coords.
         """
         if (covariates is None) == (horizon is None):
             msg = "pass exactly one of covariates or horizon"

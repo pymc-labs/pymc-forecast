@@ -350,9 +350,9 @@ class StatespaceForecaster(HMCForecaster):
         Returns
         -------
         DataTree
-            With a ``predictions`` group holding ``"forecast"`` (dims
-            ``(chain, draw, time_future, ...)``) and the latent state
-            trajectories as ``"forecast_latent"``.
+            With identical ``predictions`` and ``posterior_predictive`` groups
+            holding ``"forecast"`` (dims ``(chain, draw, time_future, ...)``)
+            and the latent state trajectories as ``"forecast_latent"``.
         """
         if (covariates is None) == (horizon is None):
             msg = "pass exactly one of covariates or horizon"
@@ -400,7 +400,12 @@ class StatespaceForecaster(HMCForecaster):
                 msg = f"unknown statespace prediction variables: {sorted(unknown)}"
                 raise KeyError(msg)
             predictions = predictions[names]
-        return xr.DataTree.from_dict({"predictions": predictions})
+        return xr.DataTree.from_dict(
+            {
+                "predictions": predictions.copy(deep=False),
+                "posterior_predictive": predictions.copy(deep=False),
+            }
+        )
 
     def predict_in_sample(
         self,

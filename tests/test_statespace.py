@@ -59,6 +59,17 @@ class TestForecast:
         np.testing.assert_array_equal(fc["time_future"].values, np.arange(25, 30))
         assert np.isfinite(fc.values).all()
 
+    def test_full_draws_are_exposed_as_posterior_predictive(self, forecaster):
+        tree = forecaster.forecast(horizon=3, num_samples=10, random_seed=SEED)
+        predictions = tree["predictions"].to_dataset()
+        posterior_predictive = tree["posterior_predictive"].to_dataset()
+        xr.testing.assert_identical(posterior_predictive, predictions)
+        assert posterior_predictive["forecast"].dims == (
+            "chain",
+            "draw",
+            "time_future",
+        )
+
     def test_latent_states_included(self, forecaster, data_and_cov):
         _, cov = data_and_cov
         tree = forecaster.forecast(cov, num_samples=10, random_seed=SEED)

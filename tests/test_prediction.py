@@ -59,6 +59,19 @@ class TestForecast:
         np.testing.assert_array_equal(pred["time_future"].values, np.arange(30, 35))
         assert pred["forecast"].sizes["draw"] == 50
 
+    def test_full_draws_are_exposed_as_posterior_predictive(self, fitted):
+        data, cov, idata = fitted
+        result = forecast(linear_model, idata, data, cov, num_samples=50, random_seed=SEED)
+        predictions = result["predictions"]
+        posterior_predictive = result["posterior_predictive"]
+        xr.testing.assert_identical(posterior_predictive, predictions)
+        assert posterior_predictive["forecast"].dims == (
+            "chain",
+            "draw",
+            "time_future",
+        )
+        assert posterior_predictive.sizes["draw"] == 50
+
     def test_recovers_known_trend(self, fitted):
         # data = 1 + 2 * trend + noise; the forecast must track the truth.
         data, cov, idata = fitted
