@@ -30,7 +30,12 @@ from pymc_forecast.data import (
     validate_alignment,
 )
 from pymc_forecast.exceptions import HorizonError
-from pymc_forecast.priors import is_prior_like, prior_obs_factory, prior_rv_factory
+from pymc_forecast.priors import (
+    PriorConfig,
+    is_prior_like,
+    prior_obs_factory,
+    prior_rv_factory,
+)
 
 __all__ = [
     "FORECAST_VAR",
@@ -209,7 +214,7 @@ ModelFunction = Callable[[Horizon, xr.DataArray], None]
 """A model body: ``(Horizon, covariates) -> None``, called inside a ``pm.Model``."""
 
 
-class ForecastingModel(abc.ABC):
+class ForecastingModel(PriorConfig, abc.ABC):
     """Object-oriented facade over the functional primitives.
 
     Subclasses implement :meth:`model` and use the bound helpers
@@ -217,9 +222,11 @@ class ForecastingModel(abc.ABC):
     :class:`Horizon` automatically. An instance is a valid model function for
     :func:`build_model` and the forecaster classes.
 
-    Priors are user-injectable: a subclass declares its overridable defaults
-    in :attr:`default_priors` and reads ``self.priors[...]`` in the model
-    body; callers override any subset at construction time::
+    Priors are user-injectable (see :class:`~pymc_forecast.priors.PriorConfig`):
+    a subclass declares its overridable defaults in
+    :attr:`~pymc_forecast.priors.PriorConfig.default_priors` and reads
+    ``self.prior_config[...]`` in the model body; callers override any subset
+    at construction time::
 
         from pymc_extras.prior import Prior
 
@@ -230,34 +237,13 @@ class ForecastingModel(abc.ABC):
             }
 
             def model(self, h, covariates):
-                drift = self.time_series("drift", self.priors["drift"])
-                self.predict(self.priors["noise"], pt.cumsum(drift))
+                drift = self.time_series("drift", self.prior_config["drift"])
+                self.predict(self.prior_config["noise"], pt.cumsum(drift))
 
         LocalLevel(priors={"drift": Prior("StudentT", nu=4, mu=0, sigma=0.2)})
-
-    Parameters
-    ----------
-    priors
-        Overrides merged over :attr:`default_priors`; values are pymc-extras
-        ``Prior`` objects (or the factory callables the primitives accept).
     """
 
     _horizon: Horizon | None = None
-
-    default_priors: Mapping[str, object] = {}
-    """Class-level default priors, overridable per instance via ``priors=``."""
-
-    def __init__(self, priors: Mapping[str, object] | None = None) -> None:
-        self._priors = {**self.default_priors, **(priors or {})}
-
-    @property
-    def priors(self) -> dict[str, object]:
-        """The effective priors: :attr:`default_priors` merged with overrides.
-
-        Falls back to the defaults when a subclass ``__init__`` does not call
-        ``super().__init__()``.
-        """
-        return getattr(self, "_priors", None) or dict(self.default_priors)
 
     @abc.abstractmethod
     def model(self, h: Horizon, covariates: xr.DataArray) -> None:

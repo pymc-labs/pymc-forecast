@@ -39,6 +39,7 @@ from pymc_forecast.data import (
 )
 from pymc_forecast.exceptions import AlignmentError, HorizonError, OptionalDependencyError
 from pymc_forecast.forecaster import HMCForecaster
+from pymc_forecast.priors import PriorConfig
 
 __all__ = ["StatespaceForecaster", "StatespaceModel"]
 
@@ -50,7 +51,7 @@ _NO_TIME_INDEX_MESSAGE = "No time index found on the supplied data"
 the adapter deliberately feeds positional data and stamps coords itself."""
 
 
-class StatespaceModel(abc.ABC):
+class StatespaceModel(PriorConfig, abc.ABC):
     """A pymc-extras statespace model definition for :class:`StatespaceForecaster`.
 
     The statespace lifecycle is two-phase — the component graph must exist
@@ -81,6 +82,12 @@ class StatespaceModel(abc.ABC):
     ``pm.Data(name, ...)`` inside ``priors``, where ``name`` is the entry in
     ``ss_mod.data_names``; at forecast time the adapter feeds the future
     covariate values through as the scenario.
+
+    Priors are user-injectable here too (see
+    :class:`~pymc_forecast.priors.PriorConfig`): declare named defaults in
+    ``default_priors``, create them inside :meth:`priors` with
+    ``self.create_prior(name)``, and let callers override any subset with
+    ``priors=`` when constructing the model object.
     """
 
     @abc.abstractmethod

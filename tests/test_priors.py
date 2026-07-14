@@ -11,6 +11,8 @@ from example_models import make_random_walk_data
 from pymc_forecast.exceptions import HorizonError
 from pymc_forecast.forecaster import Forecaster
 from pymc_forecast.model import ForecastingModel, build_model, predict, time_series
+from pymc_forecast.priors import PriorConfig
+from pymc_forecast.statespace import StatespaceModel
 
 Prior = pytest.importorskip("pymc_extras.prior").Prior
 
@@ -30,8 +32,8 @@ class PriorRandomWalk(ForecastingModel):
     }
 
     def model(self, h, covariates):
-        drift = self.time_series("drift", self.priors["drift"])
-        self.predict(self.priors["noise"], pt.cumsum(drift))
+        drift = self.time_series("drift", self.prior_config["drift"])
+        self.predict(self.prior_config["noise"], pt.cumsum(drift))
 
 
 class TestPriorPrimitives:
@@ -92,20 +94,20 @@ class TestPriorPrimitives:
 class TestForecastingModelPriors:
     def test_defaults_apply_without_overrides(self):
         model = PriorRandomWalk()
-        assert model.priors["drift"] == PriorRandomWalk.default_priors["drift"]
+        assert model.prior_config["drift"] == PriorRandomWalk.default_priors["drift"]
 
     def test_overrides_merge_over_defaults(self):
         override = Prior("StudentT", nu=4, mu=0, sigma=0.3)
         model = PriorRandomWalk(priors={"drift": override})
-        assert model.priors["drift"] == override
-        assert model.priors["noise"] == PriorRandomWalk.default_priors["noise"]
+        assert model.prior_config["drift"] == override
+        assert model.prior_config["noise"] == PriorRandomWalk.default_priors["noise"]
 
     def test_priors_fall_back_without_super_init(self):
         class NoInit(PriorRandomWalk):
             def __init__(self):
                 pass
 
-        assert NoInit().priors == dict(PriorRandomWalk.default_priors)
+        assert NoInit().prior_config == dict(PriorRandomWalk.default_priors)
 
     def test_overridden_prior_reaches_the_model_graph(self):
         data, cov = make_random_walk_data(t_obs=15, horizon=0)
@@ -150,3 +152,51 @@ class TestBatchDims:
         model = build_model(model_fn, data, cov)
         assert model.named_vars_to_dims["drift"] == ("time", "series")
         assert model.named_vars_to_dims["drift_future"] == ("time_future", "series")
+
+
+class TestCreatePrior:
+    def test_prior_object_creates_named_variable(self):
+        import pymc as pm
+
+        class WithScale(PriorConfig):
+            default_priors: ClassVar = {"scale": Prior("HalfNormal", sigma=1)}
+
+        with pm.Model() as model:
+            WithScale().create_prior("scale")
+        assert "scale" in model.named_vars
+
+    def test_callable_protocol(self):
+        import pymc as pm
+
+        configured = PriorConfig(priors={"offset": lambda name: pm.Normal(name, 0, 1)})
+        with pm.Model() as model:
+            variable = configured.create_prior("offset")
+        assert variable.name == "offset" and "offset" in model.named_vars
+
+    def test_missing_and_invalid_specs_raise_actionable_errors(self):
+        configured = PriorConfig(priors={"bad": object()})
+        with pytest.raises(KeyError, match="available priors"):
+            configured.create_prior("missing")
+        with pytest.raises(TypeError, match="create_variable"):
+            configured.create_prior("bad")
+
+    def test_statespace_models_share_the_prior_config(self):
+        import pymc as pm
+
+        class ConfiguredStatespace(StatespaceModel):
+            default_priors: ClassVar = {"scale": lambda name: pm.HalfNormal(name, 1)}
+
+            def statespace(self, data, covariates):
+                raise NotImplementedError
+
+            def priors(self, ss_mod, data, covariates):
+                self.create_prior("scale")
+
+        def override(name):
+            return pm.HalfNormal(name, 0.25)
+
+        model = ConfiguredStatespace(priors={"scale": override})
+        assert model.prior_config["scale"] is override
+        with pm.Model() as pymc_model:
+            model.priors(None, None, None)
+        assert "scale" in pymc_model.named_vars

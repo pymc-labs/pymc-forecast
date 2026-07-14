@@ -17,14 +17,20 @@ the posterior while the future latents are drawn conditional on them. A naive
 per-segment ``create_variable`` would instead give the forecast segment fresh
 hyper-priors silently drawn from the prior.
 
+On model objects, :class:`PriorConfig` turns those specifications into a
+named, overridable configuration: subclasses declare ``default_priors`` and
+callers replace any subset with ``priors={...}`` at construction time.
+
 pymc-extras is never imported here — ``Prior`` objects are recognized
 structurally — so the core package keeps that dependency optional.
 """
 
+from collections.abc import Mapping
+
 from pymc_forecast.data import FUTURE_DIM, TIME_DIM
 from pymc_forecast.exceptions import HorizonError
 
-__all__ = ["is_prior_like", "prior_obs_factory", "prior_rv_factory"]
+__all__ = ["PriorConfig", "is_prior_like", "prior_obs_factory", "prior_rv_factory"]
 
 _PRIOR_ATTRS = ("create_variable", "create_likelihood_variable", "deepcopy", "parameters", "dims")
 
@@ -32,6 +38,68 @@ _PRIOR_ATTRS = ("create_variable", "create_likelihood_variable", "deepcopy", "pa
 def is_prior_like(obj) -> bool:
     """Whether ``obj`` structurally matches the pymc-extras ``Prior`` API."""
     return all(hasattr(obj, attr) for attr in _PRIOR_ATTRS)
+
+
+class PriorConfig:
+    """Mixin: named, user-overridable priors on a model object.
+
+    Subclasses declare their defaults in :attr:`default_priors`; callers
+    override any subset with the ``priors=`` constructor argument, and the
+    model body reads the effective mapping from :attr:`prior_config` — e.g.
+    ``self.time_series("drift", self.prior_config["drift"])`` — or creates a
+    standalone variable with :meth:`create_prior`. Mixed into
+    :class:`~pymc_forecast.model.ForecastingModel` and
+    :class:`~pymc_forecast.statespace.StatespaceModel`.
+
+    Parameters
+    ----------
+    priors
+        Named overrides merged over :attr:`default_priors`; values are
+        pymc-extras ``Prior`` objects, the factory callables the model
+        primitives accept, or — for :meth:`create_prior` — any
+        ``name -> RV`` callable.
+    """
+
+    default_priors: Mapping[str, object] = {}
+    """Class-level default priors, overridable per instance via ``priors=``."""
+
+    def __init__(self, priors: Mapping[str, object] | None = None) -> None:
+        self._prior_config = {**self.default_priors, **(priors or {})}
+
+    @property
+    def prior_config(self) -> dict[str, object]:
+        """The effective priors: :attr:`default_priors` merged with overrides.
+
+        Falls back to the defaults when a subclass ``__init__`` does not call
+        ``super().__init__()``.
+        """
+        config = getattr(self, "_prior_config", None)
+        return dict(self.default_priors) if config is None else config
+
+    def create_prior(self, name: str):
+        """Create the model variable ``name`` from its configured prior.
+
+        Must run inside a ``pm.Model`` context. The configured specification
+        either exposes ``create_variable(name)`` (a pymc-extras ``Prior``,
+        created with its own dims) or is a callable ``name -> RV``, e.g.
+        ``lambda name: pm.Normal(name, 0, 1)``.
+        """
+        try:
+            spec = self.prior_config[name]
+        except KeyError as err:
+            available = sorted(self.prior_config)
+            msg = f"no prior configured for {name!r}; available priors: {available}"
+            raise KeyError(msg) from err
+        create_variable = getattr(spec, "create_variable", None)
+        if create_variable is not None:
+            return create_variable(name)
+        if callable(spec):
+            return spec(name)
+        msg = (
+            f"prior {name!r} must expose create_variable(name) or be a callable "
+            f"taking the variable name; got {type(spec).__name__}"
+        )
+        raise TypeError(msg)
 
 
 def _materialize_hyperpriors(prior, base_name: str):
