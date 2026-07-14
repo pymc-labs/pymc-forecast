@@ -1,4 +1,4 @@
-"""pymc_forecast: Bayesian time-series forecasting with PyMC.
+"""PyMC-Forecast: Bayesian time-series forecasting with PyMC.
 
 A PyMC port of `numpyro_forecast <https://github.com/juanitorduz/numpyro_forecast>`_,
 redesigned around PyMC idioms: named dims/coords everywhere, ``InferenceData``

@@ -1,4 +1,4 @@
-# pymc_forecast
+# PyMC-Forecast
 
 Bayesian time-series forecasting with [PyMC](https://www.pymc.io): you write the
 generative model; the package handles the train/forecast plumbing, inference,
@@ -10,8 +10,8 @@ rather than a 1:1 translation.
 
 ```{note}
 **Status: early development.** The design and roadmap live in
-[PLAN.md](https://github.com/pymc-labs/pymc_forecast/blob/main/PLAN.md) and the
-[issue tracker](https://github.com/pymc-labs/pymc_forecast/issues).
+[PLAN.md](https://github.com/pymc-labs/pymc-forecast/blob/main/PLAN.md) and the
+[issue tracker](https://github.com/pymc-labs/pymc-forecast/issues).
 ```
 
 ## Installation

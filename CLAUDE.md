@@ -1,6 +1,6 @@
-# pymc_forecast
+# PyMC-Forecast
 
-Bayesian time-series forecasting toolkit for PyMC. A port of
+Bayesian time-series forecasting toolkit for PyMC (import name: `pymc_forecast`). A port of
 [numpyro_forecast](https://github.com/juanitorduz/numpyro_forecast), redesigned
 around PyMC idioms — see PLAN.md for the full design and the issue tracker for
 the roadmap.

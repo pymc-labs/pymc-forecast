@@ -1,8 +1,8 @@
-"""Sphinx configuration for the pymc_forecast documentation."""
+"""Sphinx configuration for the PyMC-Forecast documentation."""
 
 from pymc_forecast import __version__
 
-project = "pymc_forecast"
+project = "PyMC-Forecast"
 copyright = "2026, PyMC Labs"
 author = "PyMC Labs"
 version = __version__
@@ -50,16 +50,16 @@ myst_enable_extensions = ["colon_fence", "deflist", "substitution"]
 # -- HTML output -------------------------------------------------------------
 
 html_theme = "pydata_sphinx_theme"
-html_title = "pymc_forecast"
+html_title = "PyMC-Forecast"
 html_theme_options = {
-    "github_url": "https://github.com/pymc-labs/pymc_forecast",
+    "github_url": "https://github.com/pymc-labs/pymc-forecast",
     "use_edit_page_button": False,
     "navbar_end": ["theme-switcher", "navbar-icon-links"],
     "secondary_sidebar_items": ["page-toc"],
 }
 html_context = {
     "github_user": "pymc-labs",
-    "github_repo": "pymc_forecast",
+    "github_repo": "pymc-forecast",
     "github_version": "main",
     "doc_path": "docs",
 }
