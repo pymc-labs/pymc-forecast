@@ -124,6 +124,56 @@ class TestForecastByFutureIndex:
             fc.forecast(horizon=2)
 
 
+class TestForecastByFutureCovariates:
+    """Covariate-conditioned forecasts from a future-only covariate frame."""
+
+    @pytest.fixture(scope="class")
+    def fc(self):
+        data, cov = make_trend_data()
+        return Forecaster(linear_model, data, cov, num_steps=8_000, random_seed=SEED)
+
+    def test_matches_full_covariate_path(self, fc):
+        _, cov = make_trend_data()
+        future_cov = cov.isel(time=slice(30, None))
+        by_future = fc.forecast(future_covariates=future_cov, num_samples=50, random_seed=SEED)
+        by_full = fc.forecast(cov, num_samples=50, random_seed=SEED)
+        np.testing.assert_allclose(
+            by_future["predictions"]["forecast"].values,
+            by_full["predictions"]["forecast"].values,
+        )
+
+    def test_forecast_is_conditioned_on_covariates(self, fc):
+        _, cov = make_trend_data()
+        future_cov = cov.isel(time=slice(30, None))
+        pred = fc.forecast(future_covariates=future_cov, num_samples=200, random_seed=SEED)
+        truth = 1.0 + 2.0 * future_cov.values[:, 0]
+        np.testing.assert_allclose(
+            pred["predictions"]["forecast"].mean(("chain", "draw")).values, truth, atol=0.25
+        )
+        np.testing.assert_array_equal(
+            pred["predictions"]["time_future"].values, cov["time"].values[30:]
+        )
+
+    def test_mismatched_covariate_names_rejected(self, fc):
+        _, cov = make_trend_data()
+        bad = cov.isel(time=slice(30, None)).assign_coords(covariate=["not_trend"])
+        with pytest.raises(AlignmentError, match="coords must match"):
+            fc.forecast(future_covariates=bad)
+
+    def test_overlapping_time_rejected(self, fc):
+        _, cov = make_trend_data()
+        with pytest.raises(AlignmentError, match="strictly after"):
+            fc.forecast(future_covariates=cov.isel(time=slice(29, None)))
+
+    def test_exclusive_with_other_horizon_specs(self, fc):
+        _, cov = make_trend_data()
+        future_cov = cov.isel(time=slice(30, None))
+        with pytest.raises(ValueError, match="exactly one"):
+            fc.forecast(cov, future_covariates=future_cov)
+        with pytest.raises(ValueError, match="exactly one"):
+            fc.forecast(future_covariates=future_cov, horizon=5)
+
+
 class TestHMCForecaster:
     @pytest.fixture(scope="class")
     def fc(self):

@@ -16,6 +16,7 @@ import xarray as xr
 from pymc_forecast.data import (
     TIME_DIM,
     as_dataarray,
+    concat_covariates,
     concat_time_index,
     extend_time_index,
     null_covariates,
@@ -88,18 +89,20 @@ class BaseForecaster(abc.ABC):
         *,
         horizon: int | None = None,
         future_index=None,
+        future_covariates=None,
         var_names=None,
         random_seed=None,
         progressbar: bool = False,
     ):
         """Sample forecasts beyond the training window.
 
-        The horizon is supplied at forecast time, in one of three mutually
+        The horizon is supplied at forecast time, in one of four mutually
         exclusive ways: pass ``covariates`` spanning the training window plus
-        the forecast steps, or — for a covariate-free model — pass
-        ``horizon=N`` to forecast ``N`` steps past the training data (its time
-        coord is extended at the inferred spacing) or ``future_index=`` to
-        forecast over an arbitrary later time index.
+        the forecast steps, ``future_covariates`` covering only the forecast
+        steps, or — for a covariate-free model — ``horizon=N`` to forecast
+        ``N`` steps past the training data (its time coord is extended at the
+        inferred spacing) or ``future_index=`` to forecast over an arbitrary
+        later time index.
 
         Parameters
         ----------
@@ -117,7 +120,17 @@ class BaseForecaster(abc.ABC):
             window, e.g. a ``DatetimeIndex`` of the period to predict. The
             horizon length is derived from it, so it need not be known at fit
             time. Forecast steps are drawn consecutively and labeled with
-            these coordinates.
+            these coordinates. The covariate-free half of the predict-time
+            horizon capability; ``future_covariates`` is the with-covariates
+            half.
+        future_covariates
+            Covariates covering only the forecast horizon, with a time index
+            lying after the training window; the forecast is conditioned on
+            them — the with-covariates half of the predict-time horizon
+            capability (``future_index`` is the covariate-free half).
+            Structure (dims, covariate names and order) must match the
+            training covariates. The horizon length is derived from it, so it
+            need not be known at fit time.
         var_names, random_seed, progressbar
             Passed through to :func:`pymc_forecast.prediction.forecast`.
 
@@ -126,16 +139,18 @@ class BaseForecaster(abc.ABC):
         DataTree
             With a ``predictions`` group carrying ``time_future`` coords.
         """
-        provided = sum(arg is not None for arg in (covariates, horizon, future_index))
+        provided = sum(
+            arg is not None for arg in (covariates, horizon, future_index, future_covariates)
+        )
         if provided != 1:
-            msg = "pass exactly one of covariates, horizon, or future_index"
+            msg = "pass exactly one of covariates, horizon, future_index, or future_covariates"
             raise ValueError(msg)
         if horizon is not None or future_index is not None:
             if self._covariates.size > 0:
                 msg = (
                     "this model was fit with covariates, so the forecast needs their "
-                    "future values: pass full-horizon covariates= instead of "
-                    "horizon=/future_index="
+                    "future values: pass future_covariates= (or full-horizon "
+                    "covariates=) instead of horizon=/future_index="
                 )
                 raise AlignmentError(msg)
             if horizon is not None:
@@ -143,6 +158,8 @@ class BaseForecaster(abc.ABC):
             else:
                 full_index = concat_time_index(self._data[TIME_DIM].values, future_index)
             covariates = null_covariates(full_index)
+        elif future_covariates is not None:
+            covariates = concat_covariates(self._covariates, future_covariates)
         posterior = self.draw_posterior(num_samples, random_seed)
         return _forecast(
             self.model_fn,

@@ -21,6 +21,7 @@ __all__ = [
     "SAMPLE_DIMS",
     "TIME_DIM",
     "as_dataarray",
+    "concat_covariates",
     "concat_time_index",
     "extend_time_index",
     "null_covariates",
@@ -218,6 +219,57 @@ def concat_time_index(index, future_index):
         )
         raise AlignmentError(msg)
     return idx.append(fut)
+
+
+def concat_covariates(covariates, future_covariates) -> xr.DataArray:
+    """Append future covariate rows to training covariates along ``"time"``.
+
+    ``future_covariates`` covers only the forecast horizon (both inputs are
+    normalized via :func:`as_dataarray` first); its time index must lie
+    strictly after the training window and its non-time structure — dims, and
+    covariate names in order — must match the training covariates, since
+    models consume covariate columns positionally. Every mismatch is rejected
+    explicitly, so xarray never silently aligns, reorders, or fills feature
+    columns. Returns the full-horizon covariates.
+
+    Raises
+    ------
+    AlignmentError
+        On a time index that does not extend the training window, or on any
+        dim/coord mismatch.
+    """
+    covariates = as_dataarray(covariates, role="covariates")
+    fut = as_dataarray(future_covariates, role="covariates")
+    if covariates.dims != fut.dims:
+        msg = (
+            "future covariates must have the same dims as the training "
+            f"covariates: got {fut.dims}, expected {covariates.dims}"
+        )
+        raise AlignmentError(msg)
+    for dim in covariates.dims:
+        if dim == TIME_DIM:
+            continue
+        if covariates.sizes[dim] != fut.sizes[dim]:
+            msg = (
+                f"future covariates size mismatch along '{dim}': "
+                f"got {fut.sizes[dim]}, expected {covariates.sizes[dim]}"
+            )
+            raise AlignmentError(msg)
+        if (dim in covariates.coords) != (dim in fut.coords):
+            msg = (
+                f"future covariates must carry a '{dim}' coord exactly when the "
+                "training covariates do; one side is unlabeled"
+            )
+            raise AlignmentError(msg)
+        if dim in covariates.coords and not np.array_equal(covariates[dim].values, fut[dim].values):
+            msg = (
+                f"future covariates '{dim}' coords must match the training "
+                f"covariates' (same names, same order): got {fut[dim].values!r}, "
+                f"expected {covariates[dim].values!r}"
+            )
+            raise AlignmentError(msg)
+    concat_time_index(covariates[TIME_DIM].values, fut[TIME_DIM].values)
+    return xr.concat([covariates, fut], dim=TIME_DIM, join="exact")
 
 
 def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
