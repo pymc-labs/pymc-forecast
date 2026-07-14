@@ -10,6 +10,7 @@ __all__ = [
     "BacktestWindowError",
     "HorizonError",
     "MethodResolutionError",
+    "NotFittedError",
     "OptionalDependencyError",
     "PymcForecastError",
 ]
@@ -33,6 +34,10 @@ class MethodResolutionError(PymcForecastError, ValueError):
 
 class BacktestWindowError(PymcForecastError, ValueError):
     """Backtest windowing parameters admit no valid windows."""
+
+
+class NotFittedError(PymcForecastError, RuntimeError):
+    """A predictive method was called on a forecaster that has not been fit."""
 
 
 class OptionalDependencyError(PymcForecastError, ImportError):

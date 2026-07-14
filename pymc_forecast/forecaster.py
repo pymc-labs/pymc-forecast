@@ -5,11 +5,14 @@ Three inference backends behind one interface: :class:`Forecaster`
 ``pm.sample``), and :class:`PathfinderForecaster` (pymc-extras Pathfinder).
 Construction fits the model on ``(data, covariates)``; :meth:`~BaseForecaster.forecast`
 then rebuilds the model over extended covariates and samples the horizon.
+Construct without data to defer the fit (:meth:`~BaseForecaster.fit`).
 """
 
 import abc
+import warnings
 from collections.abc import Mapping
 
+import numpy as np
 import pymc as pm
 import xarray as xr
 
@@ -21,7 +24,12 @@ from pymc_forecast.data import (
     extend_time_index,
     null_covariates,
 )
-from pymc_forecast.exceptions import AlignmentError, MethodResolutionError, OptionalDependencyError
+from pymc_forecast.exceptions import (
+    AlignmentError,
+    MethodResolutionError,
+    NotFittedError,
+    OptionalDependencyError,
+)
 from pymc_forecast.model import build_model
 from pymc_forecast.prediction import (
     forecast as _forecast,
@@ -37,9 +45,24 @@ __all__ = ["Forecaster", "HMCForecaster", "PathfinderForecaster"]
 DEFAULT_LEARNING_RATE = 0.01
 """Default Adam learning rate for variational fits (matches upstream)."""
 
+DEFAULT_NUM_SAMPLES = 100
+"""Default number of posterior draws for the predictive methods."""
+
+CONVERGENCE_WINDOW_FRACTION = 0.1
+"""Fraction of the ELBO loss history in each of the two windows (one at the
+midpoint of the run, one at the end) compared by the post-fit ADVI
+convergence check (see :func:`_check_vi_convergence`)."""
+
 
 class BaseForecaster(abc.ABC):
     """Shared fit/forecast plumbing.
+
+    Fitting happens on construction when ``data`` is given. Constructing
+    without data defers it — configure now, :meth:`fit` later (the
+    sklearn-style lifecycle adapter authors need)::
+
+        fc = HMCForecaster(model_fn, draws=500)   # not fitted yet
+        fc.fit(data, covariates)                  # returns self
 
     Parameters
     ----------
@@ -47,7 +70,8 @@ class BaseForecaster(abc.ABC):
         The model body (``(Horizon, covariates) -> None`` or a
         :class:`~pymc_forecast.model.ForecastingModel`).
     data
-        Observed training data.
+        Observed training data, or ``None`` to construct unfitted and call
+        :meth:`fit` later.
     covariates
         Covariates covering (at least) the training window; surplus future
         steps are ignored during fitting. ``None`` for models without
@@ -56,8 +80,34 @@ class BaseForecaster(abc.ABC):
         Seed for the fit.
     """
 
-    def __init__(self, model_fn, data, covariates=None, *, random_seed=None) -> None:
+    def __init__(self, model_fn, data=None, covariates=None, *, random_seed=None) -> None:
         self.model_fn = model_fn
+        self._random_seed = random_seed
+        self._is_fitted = False
+        if data is None:
+            if covariates is not None:
+                msg = (
+                    "covariates were given without data; pass both to fit on "
+                    "construction, or neither and call fit(data, covariates) later"
+                )
+                raise ValueError(msg)
+            return
+        self.fit(data, covariates, random_seed=random_seed)
+
+    def fit(self, data, covariates=None, *, random_seed=None) -> "BaseForecaster":
+        """Fit the model on ``(data, covariates)`` and return ``self``.
+
+        Called automatically when the forecaster is constructed with data;
+        call it explicitly on a forecaster constructed without data (or to
+        refit an existing one on new data).
+
+        Parameters
+        ----------
+        data, covariates
+            As in the constructor (``data`` is required here).
+        random_seed
+            Seed for the fit; defaults to the constructor's ``random_seed``.
+        """
         self._data = as_dataarray(data, role="data")
         if covariates is None:
             cov = null_covariates(self._data[TIME_DIM].values)
@@ -66,30 +116,61 @@ class BaseForecaster(abc.ABC):
             cov = cov.isel({TIME_DIM: slice(None, self._data.sizes[TIME_DIM])})
         self._covariates = cov
         self.model = self._build_model()
-        self._fit(random_seed)
+        self._fit(self._random_seed if random_seed is None else random_seed)
+        self._is_fitted = True
+        return self
+
+    def _require_fitted(self) -> None:
+        if not self._is_fitted:
+            msg = (
+                f"this {type(self).__name__} is not fitted yet; construct it "
+                "with data or call fit(data, covariates) first"
+            )
+            raise NotFittedError(msg)
 
     def _build_model(self) -> pm.Model:
-        """Build the training model from the normalized data (called once
-        from ``__init__``); adapters for other model lifecycles override
-        this."""
+        """Build the training model from the normalized data (called once per
+        :meth:`fit`); adapters for other model lifecycles override this."""
         return build_model(self.model_fn, self._data, self._covariates)
 
     @abc.abstractmethod
     def _fit(self, random_seed) -> None:
-        """Fit the training model (called once from ``__init__``)."""
+        """Fit the training model (called once per :meth:`fit`)."""
+
+    def draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
+        """Return ``num_samples`` posterior draws as a posterior ``Dataset``.
+
+        Feed the result to the ``posterior=`` argument of :meth:`forecast`
+        and :meth:`predict_in_sample` to condition several predictive calls
+        on the same draws (see those methods).
+        """
+        self._require_fitted()
+        return self._draw_posterior(num_samples, random_seed)
 
     @abc.abstractmethod
-    def draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
-        """Return ``num_samples`` posterior draws as a posterior ``Dataset``."""
+    def _draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
+        """Backend-specific posterior sampling (fit is guaranteed)."""
+
+    def _resolve_posterior(self, posterior, num_samples, random_seed) -> xr.Dataset:
+        """One posterior for a predictive call: the caller's, or fresh draws."""
+        if posterior is not None:
+            if num_samples is not None:
+                msg = "pass either posterior= or num_samples=, not both"
+                raise ValueError(msg)
+            return posterior_dataset(posterior)
+        if num_samples is None:
+            num_samples = DEFAULT_NUM_SAMPLES
+        return self.draw_posterior(num_samples, random_seed)
 
     def forecast(
         self,
         covariates=None,
-        num_samples: int = 100,
+        num_samples: int | None = None,
         *,
         horizon: int | None = None,
         future_index=None,
         future_covariates=None,
+        posterior=None,
         var_names=None,
         random_seed=None,
         progressbar: bool = False,
@@ -110,7 +191,8 @@ class BaseForecaster(abc.ABC):
             Covariates spanning training window + forecast horizon (time coords
             must extend the training data's).
         num_samples
-            Number of posterior draws (and forecast samples).
+            Number of posterior draws (and forecast samples); default 100.
+            Mutually exclusive with ``posterior``.
         horizon
             Number of steps to forecast past the training data (covariate-free
             models only).
@@ -131,6 +213,14 @@ class BaseForecaster(abc.ABC):
             Structure (dims, covariate names and order) must match the
             training covariates. The horizon length is derived from it, so it
             need not be known at fit time.
+        posterior
+            A fixed posterior to condition on, in any shape
+            :func:`~pymc_forecast.prediction.posterior_dataset` accepts
+            (typically from :meth:`draw_posterior`). Passing the same
+            posterior to :meth:`predict_in_sample` and :meth:`forecast` makes
+            the calls draw-coherent: draw *i* in both results comes from the
+            same parameter draw. Without it, each call draws
+            ``num_samples`` fresh subsamples.
         var_names, random_seed, progressbar
             Passed through to :func:`pymc_forecast.prediction.forecast`.
 
@@ -139,6 +229,7 @@ class BaseForecaster(abc.ABC):
         DataTree
             With a ``predictions`` group carrying ``time_future`` coords.
         """
+        self._require_fitted()
         provided = sum(
             arg is not None for arg in (covariates, horizon, future_index, future_covariates)
         )
@@ -160,7 +251,7 @@ class BaseForecaster(abc.ABC):
             covariates = null_covariates(full_index)
         elif future_covariates is not None:
             covariates = concat_covariates(self._covariates, future_covariates)
-        posterior = self.draw_posterior(num_samples, random_seed)
+        posterior = self._resolve_posterior(posterior, num_samples, random_seed)
         return _forecast(
             self.model_fn,
             posterior,
@@ -173,13 +264,27 @@ class BaseForecaster(abc.ABC):
 
     def predict_in_sample(
         self,
-        num_samples: int = 100,
+        num_samples: int | None = None,
         *,
+        posterior=None,
         random_seed=None,
         progressbar: bool = False,
     ):
-        """Sample the in-sample posterior predictive of ``"obs"``."""
-        posterior = self.draw_posterior(num_samples, random_seed)
+        """Sample the in-sample posterior predictive of ``"obs"`` (and ``"mu"``).
+
+        Parameters
+        ----------
+        num_samples
+            Number of posterior draws; default 100. Mutually exclusive with
+            ``posterior``.
+        posterior
+            A fixed posterior to condition on (see :meth:`forecast` for the
+            draw-coherence semantics).
+        random_seed, progressbar
+            Passed through to :func:`pymc_forecast.prediction.predict_in_sample`.
+        """
+        self._require_fitted()
+        posterior = self._resolve_posterior(posterior, num_samples, random_seed)
         return predict_in_sample(
             self.model_fn,
             posterior,
@@ -209,8 +314,53 @@ def _resolve_optimizer(optimizer):
     raise MethodResolutionError(msg)
 
 
+def _check_vi_convergence(losses, num_steps: int) -> None:
+    """Warn when the ELBO loss is still clearly descending at the end of a fit.
+
+    Heuristic: compare the median loss over the last
+    ``CONVERGENCE_WINDOW_FRACTION`` of the steps against the median over the
+    same-sized window starting at the midpoint of the history. The fit is
+    flagged when the improvement between the two windows exceeds both the
+    fluctuation within the final window (its median absolute deviation) and
+    twice the standard error of the median difference — i.e. the optimizer
+    was still making clear progress, beyond the stochastic-ELBO noise floor,
+    over the second half of the run. Medians are used because the raw ELBO
+    history is spiky early in a fit. A slow descent can hide inside the
+    noise, so the absence of a warning is not proof of convergence.
+    """
+    hist = np.asarray(losses, dtype=float)
+    hist = hist[np.isfinite(hist)]
+    n = int(len(hist) * CONVERGENCE_WINDOW_FRACTION)
+    if n < 2:
+        return
+    last = hist[-n:]
+    mid = hist[len(hist) // 2 :][:n]
+    improvement = float(np.median(mid) - np.median(last))
+    noise = float(np.median(np.abs(last - np.median(last))))
+    # standard error of the difference of two window medians, MAD-scaled
+    sem = 1.858 * noise * float(np.sqrt(2.0 / n))
+    if improvement > max(noise, 2.0 * sem):
+        msg = (
+            f"ADVI has not converged after {num_steps} steps: the ELBO loss "
+            f"is still descending (median over the last {n} steps improved "
+            f"by {improvement:.3g} since mid-run, more than the within-window "
+            f"fluctuation {noise:.3g}). The forecast may be confidently wrong "
+            "— increase num_steps, raise the learning rate, or use "
+            "HMCForecaster; inspect the loss history via the `losses` "
+            "attribute."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=2)
+
+
 class Forecaster(BaseForecaster):
     """Fit a forecasting model with variational inference (ADVI by default).
+
+    Mean-field ADVI can underconverge silently — the posterior looks fine but
+    is biased and overconfident. A post-fit heuristic warns when the ELBO is
+    still descending (see :func:`_check_vi_convergence`); absence of the
+    warning is *not* proof of convergence, so check :attr:`losses` has
+    plateaued before trusting results, and prefer :class:`HMCForecaster` when
+    accuracy matters more than speed.
 
     Parameters
     ----------
@@ -224,6 +374,8 @@ class Forecaster(BaseForecaster):
         optimizer such as ``pm.adam(learning_rate=...)``.
     num_steps
         Number of optimization steps.
+    progressbar
+        Show the fit progress bar.
     fit_kwargs
         Extra keyword arguments for ``pm.fit``.
 
@@ -238,22 +390,25 @@ class Forecaster(BaseForecaster):
     def __init__(
         self,
         model_fn,
-        data,
+        data=None,
         covariates=None,
         *,
         method="advi",
         optimizer=None,
         num_steps: int = 10_000,
         random_seed=None,
+        progressbar: bool = False,
         fit_kwargs: Mapping | None = None,
     ) -> None:
         self._method = method
         self._optimizer = _resolve_optimizer(optimizer)
         self._num_steps = num_steps
+        self._progressbar = progressbar
         self._fit_kwargs = dict(fit_kwargs or {})
         super().__init__(model_fn, data, covariates, random_seed=random_seed)
 
     def _fit(self, random_seed) -> None:
+        fit_kwargs = dict(self._fit_kwargs)
         try:
             self.approx = pm.fit(
                 n=self._num_steps,
@@ -261,8 +416,8 @@ class Forecaster(BaseForecaster):
                 model=self.model,
                 random_seed=random_seed,
                 obj_optimizer=self._optimizer,
-                progressbar=self._fit_kwargs.pop("progressbar", False),
-                **self._fit_kwargs,
+                progressbar=fit_kwargs.pop("progressbar", self._progressbar),
+                **fit_kwargs,
             )
         except KeyError as err:
             msg = (
@@ -271,8 +426,9 @@ class Forecaster(BaseForecaster):
             )
             raise MethodResolutionError(msg) from err
         self.losses = self.approx.hist
+        _check_vi_convergence(self.losses, self._num_steps)
 
-    def draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
+    def _draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
         """Draw ``num_samples`` posterior samples from the approximation."""
         idata = self.approx.sample(draws=num_samples, random_seed=random_seed)
         return posterior_dataset(idata)
@@ -290,6 +446,8 @@ class HMCForecaster(BaseForecaster):
     nuts_sampler
         NUTS backend: ``"pymc"`` (default), ``"nutpie"``, ``"numpyro"``, or
         ``"blackjax"``.
+    progressbar
+        Show the sampling progress bar.
     sample_kwargs
         Extra keyword arguments for ``pm.sample``.
 
@@ -302,7 +460,7 @@ class HMCForecaster(BaseForecaster):
     def __init__(
         self,
         model_fn,
-        data,
+        data=None,
         covariates=None,
         *,
         draws: int = 1000,
@@ -310,16 +468,19 @@ class HMCForecaster(BaseForecaster):
         chains: int = 2,
         nuts_sampler: str = "pymc",
         random_seed=None,
+        progressbar: bool = False,
         sample_kwargs: Mapping | None = None,
     ) -> None:
         self._draws = draws
         self._tune = tune
         self._chains = chains
         self._nuts_sampler = nuts_sampler
+        self._progressbar = progressbar
         self._sample_kwargs = dict(sample_kwargs or {})
         super().__init__(model_fn, data, covariates, random_seed=random_seed)
 
     def _fit(self, random_seed) -> None:
+        sample_kwargs = dict(self._sample_kwargs)
         self.idata = pm.sample(
             draws=self._draws,
             tune=self._tune,
@@ -327,11 +488,11 @@ class HMCForecaster(BaseForecaster):
             nuts_sampler=self._nuts_sampler,
             model=self.model,
             random_seed=random_seed,
-            progressbar=self._sample_kwargs.pop("progressbar", False),
-            **self._sample_kwargs,
+            progressbar=sample_kwargs.pop("progressbar", self._progressbar),
+            **sample_kwargs,
         )
 
-    def draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
+    def _draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
         """Subsample ``num_samples`` draws from the MCMC posterior."""
         return thin_draws(self.idata, num_samples, random_seed)
 
@@ -346,6 +507,8 @@ class PathfinderForecaster(BaseForecaster):
     ----------
     model_fn, data, covariates, random_seed
         See :class:`BaseForecaster`.
+    progressbar
+        Show the fit progress bar.
     pathfinder_kwargs
         Extra keyword arguments for ``pymc_extras.fit_pathfinder``
         (e.g. ``num_paths``, ``num_draws``).
@@ -359,12 +522,14 @@ class PathfinderForecaster(BaseForecaster):
     def __init__(
         self,
         model_fn,
-        data,
+        data=None,
         covariates=None,
         *,
         random_seed=None,
+        progressbar: bool = False,
         pathfinder_kwargs: Mapping | None = None,
     ) -> None:
+        self._progressbar = progressbar
         self._pathfinder_kwargs = dict(pathfinder_kwargs or {})
         super().__init__(model_fn, data, covariates, random_seed=random_seed)
 
@@ -373,13 +538,14 @@ class PathfinderForecaster(BaseForecaster):
             from pymc_extras import fit_pathfinder
         except ImportError as err:
             raise OptionalDependencyError("pymc-extras", "extras", "PathfinderForecaster") from err
+        pathfinder_kwargs = dict(self._pathfinder_kwargs)
         self.idata = fit_pathfinder(
             model=self.model,
             random_seed=random_seed,
-            progressbar=self._pathfinder_kwargs.pop("progressbar", False),
-            **self._pathfinder_kwargs,
+            progressbar=pathfinder_kwargs.pop("progressbar", self._progressbar),
+            **pathfinder_kwargs,
         )
 
-    def draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
+    def _draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
         """Subsample ``num_samples`` draws from the Pathfinder posterior."""
         return thin_draws(self.idata, num_samples, random_seed)

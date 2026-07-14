@@ -18,14 +18,15 @@ DRIFT = 0.15
 
 def rw_model(h: Horizon, covariates: xr.DataArray) -> None:
     """Latent random walk with drift, observed with Normal noise."""
-    mu = pm.Normal("mu", 0.0, 0.5)
+    # "mu" is reserved by predict() for the noise-free predictor
+    drift = pm.Normal("drift", 0.0, 0.5)
     sigma = pm.HalfNormal("sigma", 0.2)
     level = markov_time_series(
         h,
         "level",
         init=0.0,
-        transition=lambda z, mu, sigma: pm.Normal.dist(z + mu, sigma),
-        params=(mu, sigma),
+        transition=lambda z, drift, sigma: pm.Normal.dist(z + drift, sigma),
+        params=(drift, sigma),
     )
     predict(
         h,
@@ -103,8 +104,8 @@ class TestForecastContinuity:
         assert abs(first - (last_level + DRIFT)) < 0.3
 
     def test_drift_recovered(self, forecaster):
-        mu_hat = float(forecaster.idata["posterior"]["mu"].mean())
-        assert abs(mu_hat - DRIFT) < 0.05
+        drift_hat = float(forecaster.idata["posterior"]["drift"].mean())
+        assert abs(drift_hat - DRIFT) < 0.05
 
     def test_future_steps_accumulate_drift(self, forecaster, rw_data):
         _, cov = rw_data

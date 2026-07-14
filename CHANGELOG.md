@@ -6,6 +6,30 @@ The dim/coord/group/variable names on prediction outputs (documented in
 [docs/schema.md](docs/schema.md)) are public API: any change to them is a
 breaking change, made only in a minor release and called out here.
 
+## Unreleased
+
+- Schema addition — noise-free latent predictor: prediction outputs of models
+  registered through `predict()` now carry the draw-level latent before
+  observation noise, as `mu` in `posterior_predictive` and `mu_future` in
+  `predictions` (constants `MU_VAR` / `MU_FORECAST_VAR`). The names `mu` and
+  `mu_future` are now reserved; a model body defining them raises a clear
+  error ([#36](https://github.com/pymc-labs/pymc-forecast/issues/36)).
+- Draw-coherent predictions: `forecast(...)` and `predict_in_sample(...)` on
+  every forecaster accept `posterior=` (typically from `draw_posterior()`) to
+  condition several predictive calls on the same posterior draws; mutually
+  exclusive with `num_samples`
+  ([#37](https://github.com/pymc-labs/pymc-forecast/issues/37)).
+- `Forecaster` warns (`UserWarning`) when the ELBO loss is still clearly
+  descending at the end of the fit — VI results should be convergence-checked
+  (`fc.losses`) before use
+  ([#38](https://github.com/pymc-labs/pymc-forecast/issues/38)).
+- Uniform constructor surface: every forecaster (including
+  `StatespaceForecaster`) accepts `progressbar=` directly, and all support a
+  deferred fit — construct without data, then `fc.fit(data, covariates)`
+  (returns `self`); predictive calls on an unfitted forecaster raise the new
+  `NotFittedError`
+  ([#39](https://github.com/pymc-labs/pymc-forecast/issues/39)).
+
 ## 0.1.0 (2026-07-14)
 
 Five features aimed at making the package cleanly wrappable as a model

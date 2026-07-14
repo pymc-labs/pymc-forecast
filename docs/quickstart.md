@@ -38,12 +38,24 @@ results = backtest(y, None, model, min_train_window=48, test_window=4, stride=4,
                    num_samples=200, forecaster_options={"num_steps": 3_000}, random_seed=0)
 ```
 
+## Check VI convergence
+
+{class}`~pymc_forecast.Forecaster` uses mean-field ADVI, which can
+underconverge silently and hand back confidently wrong forecasts. A post-fit
+heuristic warns when the ELBO loss is still clearly descending, but its
+absence is not proof of convergence — inspect `fc.losses` and confirm it has
+plateaued before trusting results. Increase `num_steps`, raise the learning
+rate (`optimizer=0.05`), or switch to {class}`~pymc_forecast.HMCForecaster`
+when accuracy matters more than speed.
+
 ## Other inference backends
 
 Swap {class}`~pymc_forecast.Forecaster` for {class}`~pymc_forecast.HMCForecaster`
 (NUTS, with `nuts_sampler="nutpie"/"numpyro"/...`) or
 {class}`~pymc_forecast.PathfinderForecaster` (pymc-extras) — the fit/forecast
-interface is identical.
+interface is identical. All forecasters accept `progressbar=` directly, and
+all support a deferred fit for configure-now / fit-later lifecycles:
+`fc = HMCForecaster(model); fc.fit(train)`.
 
 ## Covariates and richer latents
 
