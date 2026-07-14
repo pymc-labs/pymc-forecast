@@ -5,6 +5,7 @@ import xarray as xr
 
 from pymc_forecast.data import (
     as_dataarray,
+    combine_time_indexes,
     extend_time_index,
     null_covariates,
     validate_alignment,
@@ -87,6 +88,26 @@ class TestExtendTimeIndex:
     def test_uneven_numeric_rejected(self):
         with pytest.raises(AlignmentError, match="evenly spaced"):
             extend_time_index(np.array([0, 1, 4]), 2)
+
+
+class TestCombineTimeIndexes:
+    def test_preserves_arbitrary_future_coordinates(self):
+        result = combine_time_indexes([0, 1, 2], [10, 20, 50])
+        np.testing.assert_array_equal(result, [0, 1, 2, 10, 20, 50])
+
+    def test_preserves_datetime_coordinates(self):
+        observed = pd.date_range("2026-01-01", periods=3, freq="D")
+        future = pd.DatetimeIndex(["2026-02-01", "2026-03-15"])
+        result = combine_time_indexes(observed, future)
+        np.testing.assert_array_equal(result[-2:], future)
+
+    def test_rejects_empty_duplicate_and_overlapping_coordinates(self):
+        with pytest.raises(AlignmentError, match="at least one"):
+            combine_time_indexes([0, 1], [])
+        with pytest.raises(AlignmentError, match="unique"):
+            combine_time_indexes([0, 1], [2, 2])
+        with pytest.raises(AlignmentError, match="must not overlap"):
+            combine_time_indexes([0, 1], [1, 2])
 
 
 class TestValidateAlignment:

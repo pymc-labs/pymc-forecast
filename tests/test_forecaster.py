@@ -80,12 +80,24 @@ class TestForecastByHorizon:
         assert pred["forecast"].sizes["time_future"] == 5
         np.testing.assert_array_equal(pred["time_future"].values, np.arange(40, 45))
 
+    def test_explicit_future_index_builds_arbitrary_window(self, fc):
+        future_index = np.array([100, 105, 1000])
+        pred = fc.forecast(
+            future_index=future_index,
+            num_samples=100,
+            random_seed=SEED,
+        )["predictions"]
+        np.testing.assert_array_equal(pred["time_future"].values, future_index)
+        assert pred["forecast"].sizes["time_future"] == len(future_index)
+
     def test_exactly_one_of_covariates_horizon(self, fc):
         _, cov = make_random_walk_data()
         with pytest.raises(ValueError, match="exactly one"):
             fc.forecast(cov, horizon=5)
         with pytest.raises(ValueError, match="exactly one"):
             fc.forecast()
+        with pytest.raises(ValueError, match="exactly one"):
+            fc.forecast(cov, future_index=[50, 51])
 
 
 class TestHMCForecaster:

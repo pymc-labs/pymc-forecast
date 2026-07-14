@@ -57,7 +57,9 @@ results = backtest(y, None, model, min_train_window=48, test_window=4, stride=4,
 Swap `Forecaster` for `HMCForecaster` (NUTS, with `nuts_sampler="nutpie"/"numpyro"/...`)
 or `PathfinderForecaster` (pymc-extras) — the fit/forecast interface is identical.
 For models with real covariates, pass full-horizon `covariates` to `.forecast()`
-instead of `horizon=`. See `markov_time_series` for state-space latents and
+instead of `horizon=`. Covariate-free models can also pass an exact, potentially
+irregular future coordinate with `future_index=`; its length determines the
+forecast horizon at prediction time. See `markov_time_series` for state-space latents and
 `predict_mvn` for observation noise correlated across time.
 
 [pymc-extras statespace](https://github.com/pymc-devs/pymc-extras) structural models

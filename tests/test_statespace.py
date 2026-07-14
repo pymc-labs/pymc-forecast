@@ -71,6 +71,18 @@ class TestForecast:
             tree["predictions"]["forecast"]["time_future"].values, np.arange(25, 28)
         )
 
+    def test_explicit_future_index(self, forecaster):
+        future_index = np.array([100, 105, 1000])
+        tree = forecaster.forecast(
+            future_index=future_index,
+            num_samples=10,
+            random_seed=SEED,
+        )
+        np.testing.assert_array_equal(
+            tree["predictions"]["forecast"]["time_future"].values,
+            future_index,
+        )
+
     def test_forecast_continues_the_level(self, forecaster, data_and_cov):
         data, cov = data_and_cov
         tree = forecaster.forecast(cov, num_samples=100, random_seed=SEED)
@@ -157,6 +169,11 @@ class TestRegressionCovariates:
         forecaster, _, _ = regression_forecaster
         with pytest.raises(AlignmentError, match="needs future values"):
             forecaster.forecast(horizon=3, num_samples=10)
+
+    def test_future_index_rejected_without_future_values(self, regression_forecaster):
+        forecaster, _, _ = regression_forecaster
+        with pytest.raises(ValueError, match="cannot supply future values"):
+            forecaster.forecast(future_index=[100, 200], num_samples=10)
 
 
 class TestConstructionValidation:

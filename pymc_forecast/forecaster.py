@@ -13,7 +13,13 @@ from collections.abc import Mapping
 import pymc as pm
 import xarray as xr
 
-from pymc_forecast.data import TIME_DIM, as_dataarray, extend_time_index, null_covariates
+from pymc_forecast.data import (
+    TIME_DIM,
+    as_dataarray,
+    combine_time_indexes,
+    extend_time_index,
+    null_covariates,
+)
 from pymc_forecast.exceptions import MethodResolutionError, OptionalDependencyError
 from pymc_forecast.model import build_model
 from pymc_forecast.prediction import (
@@ -80,6 +86,7 @@ class BaseForecaster(abc.ABC):
         covariates=None,
         num_samples: int = 100,
         *,
+        future_index=None,
         horizon: int | None = None,
         var_names=None,
         random_seed=None,
@@ -87,10 +94,11 @@ class BaseForecaster(abc.ABC):
     ):
         """Sample forecasts beyond the training window.
 
-        Provide the horizon in one of two ways: pass ``covariates`` spanning
-        the training window plus the forecast steps, or — for a covariate-free
-        model — pass ``horizon=N`` to forecast ``N`` steps past the training
-        data (its time coord is extended at the inferred spacing).
+        Provide the horizon in one of three ways: pass ``covariates`` spanning
+        training plus forecast steps; pass an explicit ``future_index`` for a
+        covariate-free model; or pass ``horizon=N`` to infer regularly spaced
+        future coordinates. The horizon is always determined at this call,
+        never at fit time.
 
         Parameters
         ----------
@@ -98,6 +106,9 @@ class BaseForecaster(abc.ABC):
             Covariates spanning training window + forecast horizon (time coords
             must extend the training data's). Mutually exclusive with
             ``horizon``.
+        future_index
+            Exact coordinates of an arbitrary future window for a
+            covariate-free model. No regular spacing is required.
         num_samples
             Number of posterior draws (and forecast samples).
         horizon
@@ -111,10 +122,17 @@ class BaseForecaster(abc.ABC):
         DataTree
             With a ``predictions`` group carrying ``time_future`` coords.
         """
-        if (covariates is None) == (horizon is None):
-            msg = "pass exactly one of covariates or horizon"
+        provided = sum(value is not None for value in (covariates, future_index, horizon))
+        if provided != 1:
+            msg = "pass exactly one of covariates, future_index, or horizon"
             raise ValueError(msg)
-        if horizon is not None:
+        if future_index is not None:
+            if self._covariates.size:
+                msg = "future_index cannot supply future values for a model fitted with covariates"
+                raise ValueError(msg)
+            full_index = combine_time_indexes(self._data[TIME_DIM].values, future_index)
+            covariates = null_covariates(full_index)
+        elif horizon is not None:
             full_index = extend_time_index(self._data[TIME_DIM].values, horizon)
             covariates = null_covariates(full_index)
         posterior = self.draw_posterior(num_samples, random_seed)

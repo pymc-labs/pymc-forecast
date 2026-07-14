@@ -18,6 +18,7 @@ __all__ = [
     "FUTURE_DIM",
     "TIME_DIM",
     "as_dataarray",
+    "combine_time_indexes",
     "extend_time_index",
     "null_covariates",
     "validate_alignment",
@@ -156,6 +157,30 @@ def extend_time_index(index, horizon: int):
         step = steps[0]
     future = values[-1] + step * np.arange(1, horizon + 1)
     return pd.Index(np.concatenate([values, future]))
+
+
+def combine_time_indexes(index, future_index):
+    """Combine observed and explicit future time coordinates.
+
+    Unlike :func:`extend_time_index`, this does not infer a frequency or
+    require regular spacing. The predict-time coordinate is preserved exactly,
+    after checking that it is non-empty, unique, and disjoint from the fitted
+    training coordinate.
+    """
+    import pandas as pd
+
+    observed = pd.Index(index)
+    future = pd.Index(future_index)
+    if len(future) == 0:
+        msg = "future_index must contain at least one coordinate"
+        raise AlignmentError(msg)
+    if future.has_duplicates:
+        msg = "future_index coordinates must be unique"
+        raise AlignmentError(msg)
+    if len(observed.intersection(future)):
+        msg = "future_index coordinates must not overlap the training window"
+        raise AlignmentError(msg)
+    return observed.append(future)
 
 
 def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
