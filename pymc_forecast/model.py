@@ -30,6 +30,7 @@ from pymc_forecast.data import (
     validate_alignment,
 )
 from pymc_forecast.exceptions import HorizonError
+from pymc_forecast.priors import PriorConfig
 
 __all__ = [
     "FORECAST_VAR",
@@ -196,13 +197,16 @@ ModelFunction = Callable[[Horizon, xr.DataArray], None]
 """A model body: ``(Horizon, covariates) -> None``, called inside a ``pm.Model``."""
 
 
-class ForecastingModel(abc.ABC):
+class ForecastingModel(PriorConfig, abc.ABC):
     """Object-oriented facade over the functional primitives.
 
     Subclasses implement :meth:`model` and use the bound helpers
     :meth:`time_series` / :meth:`predict`, which thread the current
-    :class:`Horizon` automatically. An instance is a valid model function for
-    :func:`build_model` and the forecaster classes.
+    :class:`Horizon` automatically. Named priors can be declared through
+    :attr:`~pymc_forecast.priors.PriorConfig.default_priors` and created with
+    :meth:`~pymc_forecast.priors.PriorConfig.create_prior`; callers override
+    them with ``priors=`` on the model object. An instance is a valid model
+    function for :func:`build_model` and the forecaster classes.
     """
 
     _horizon: Horizon | None = None

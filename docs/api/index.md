@@ -6,6 +6,7 @@ the modules group the reference by responsibility.
 - [`pymc_forecast.model`](model.md) — Model-building core: `Horizon`, `time_series`, `predict`, `build_model`, and the `ForecastingModel` facade.
 - [`pymc_forecast.forecaster`](forecaster.md) — Forecaster classes: `Forecaster` (ADVI), `HMCForecaster` (NUTS), `PathfinderForecaster`.
 - [`pymc_forecast.prediction`](prediction.md) — Posterior-predictive plumbing: `forecast`, `predict_in_sample`, `thin_draws`.
+- [`pymc_forecast.priors`](priors.md) — Named, user-overridable prior configuration for model objects.
 - [`pymc_forecast.evaluate`](evaluate.md) — Rolling/expanding-window backtesting: `backtest`, `BacktestResult`, `results_to_dataframe`.
 - [`pymc_forecast.metrics`](metrics.md) — Dim-aware forecast metrics: CRPS, pinball, interval score, coverage, MASE, `evaluate_forecast`.
 - [`pymc_forecast.features`](features.md) — Feature builders: Fourier design matrices and periodic tiling.
@@ -23,6 +24,7 @@ the modules group the reference by responsibility.
 model
 forecaster
 prediction
+priors
 evaluate
 metrics
 features
