@@ -57,7 +57,8 @@ results = backtest(y, None, model, min_train_window=48, test_window=4, stride=4,
 Swap `Forecaster` for `HMCForecaster` (NUTS, with `nuts_sampler="nutpie"/"numpyro"/...`)
 or `PathfinderForecaster` (pymc-extras) — the fit/forecast interface is identical.
 For models with real covariates, pass full-horizon `covariates` to `.forecast()`
-instead of `horizon=`. Covariate-free models can also forecast over an exact —
+instead of `horizon=`, or hand the post-training rows alone to
+`future_covariates=` for a forecast conditioned on them. Covariate-free models can also forecast over an exact —
 even irregular — later time index with `future_index=`; the horizon length is
 derived from it at forecast time. See `markov_time_series` for state-space latents and
 `predict_mvn` for observation noise correlated across time.

@@ -202,3 +202,19 @@ class TestConcatCovariates:
         )
         with pytest.raises(AlignmentError, match="strictly after"):
             concat_covariates(self._train_cov(), fut)
+
+    def test_raw_training_input_normalized(self):
+        training = pd.DataFrame(np.zeros((3, 2)), index=[0, 1, 2], columns=["a", "b"])
+        future = pd.DataFrame(np.ones((2, 2)), index=[3, 4], columns=["a", "b"])
+        full = concat_covariates(training, future)
+        assert full.dims == ("time", "covariate")
+        assert full.sizes["time"] == 5
+
+    def test_asymmetric_coord_labeling_rejected(self):
+        unlabeled = xr.DataArray(
+            np.ones((2, 2)),
+            dims=("time", "covariate"),
+            coords={"time": [5, 6]},
+        )
+        with pytest.raises(AlignmentError, match="one side is unlabeled"):
+            concat_covariates(self._train_cov(), unlabeled)

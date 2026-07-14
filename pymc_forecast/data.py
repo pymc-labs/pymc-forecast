@@ -209,14 +209,16 @@ def concat_time_index(index, future_index):
     return idx.append(fut)
 
 
-def concat_covariates(covariates: xr.DataArray, future_covariates) -> xr.DataArray:
+def concat_covariates(covariates, future_covariates) -> xr.DataArray:
     """Append future covariate rows to training covariates along ``"time"``.
 
-    ``future_covariates`` covers only the forecast horizon (it is normalized
-    via :func:`as_dataarray` first); its time index must lie strictly after
-    the training window and its non-time structure — dims, and covariate
-    names in order — must match the training covariates, since models consume
-    covariate columns positionally. Returns the full-horizon covariates.
+    ``future_covariates`` covers only the forecast horizon (both inputs are
+    normalized via :func:`as_dataarray` first); its time index must lie
+    strictly after the training window and its non-time structure — dims, and
+    covariate names in order — must match the training covariates, since
+    models consume covariate columns positionally. Every mismatch is rejected
+    explicitly, so xarray never silently aligns, reorders, or fills feature
+    columns. Returns the full-horizon covariates.
 
     Raises
     ------
@@ -224,6 +226,7 @@ def concat_covariates(covariates: xr.DataArray, future_covariates) -> xr.DataArr
         On a time index that does not extend the training window, or on any
         dim/coord mismatch.
     """
+    covariates = as_dataarray(covariates, role="covariates")
     fut = as_dataarray(future_covariates, role="covariates")
     if covariates.dims != fut.dims:
         msg = (
@@ -240,8 +243,13 @@ def concat_covariates(covariates: xr.DataArray, future_covariates) -> xr.DataArr
                 f"got {fut.sizes[dim]}, expected {covariates.sizes[dim]}"
             )
             raise AlignmentError(msg)
-        has_coord = dim in covariates.coords, dim in fut.coords
-        if all(has_coord) and not np.array_equal(covariates[dim].values, fut[dim].values):
+        if (dim in covariates.coords) != (dim in fut.coords):
+            msg = (
+                f"future covariates must carry a '{dim}' coord exactly when the "
+                "training covariates do; one side is unlabeled"
+            )
+            raise AlignmentError(msg)
+        if dim in covariates.coords and not np.array_equal(covariates[dim].values, fut[dim].values):
             msg = (
                 f"future covariates '{dim}' coords must match the training "
                 f"covariates' (same names, same order): got {fut[dim].values!r}, "
