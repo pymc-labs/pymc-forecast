@@ -11,6 +11,7 @@ from pymc_forecast.prediction import (
     forecast,
     posterior_dataset,
     predict_in_sample,
+    prediction_samples,
     thin_draws,
 )
 
@@ -71,6 +72,55 @@ class TestForecast:
         data, cov, idata = fitted
         with pytest.raises(HorizonError, match="no forecast horizon"):
             forecast(linear_model, idata, data, cov.isel({TIME_DIM: slice(None, 30)}))
+
+
+class TestDrawLevelSamples:
+    """The issue #20 contract: full posterior-predictive samples, no reduction."""
+
+    def test_forecast_retains_chain_and_draw(self, fitted):
+        data, cov, idata = fitted
+        result = forecast(linear_model, idata, data, cov, num_samples=50, random_seed=SEED)
+        fc = result["predictions"]["forecast"]
+        assert fc.dims == ("chain", "draw", "time_future")
+        assert fc.sizes["draw"] == 50
+        # genuinely distinct draws, not a broadcast point forecast
+        assert float(fc.std(("chain", "draw")).min()) > 0
+
+    def test_in_sample_retains_chain_and_draw(self, fitted):
+        data, cov, idata = fitted
+        result = predict_in_sample(linear_model, idata, data, cov, num_samples=40)
+        obs = result["posterior_predictive"]["obs"]
+        assert obs.dims == ("chain", "draw", "time")
+        assert obs.sizes["draw"] == 40
+        assert float(obs.std(("chain", "draw")).min()) > 0
+
+    def test_prediction_samples_from_forecast_result(self, fitted):
+        data, cov, idata = fitted
+        result = forecast(linear_model, idata, data, cov, num_samples=30, random_seed=SEED)
+        ds = prediction_samples(result)
+        assert isinstance(ds, xr.Dataset)
+        assert "forecast" in ds
+        assert ds["forecast"].sizes["draw"] == 30
+        xr.testing.assert_identical(ds["forecast"], result["predictions"]["forecast"])
+
+    def test_prediction_samples_from_in_sample_result(self, fitted):
+        data, cov, idata = fitted
+        result = predict_in_sample(linear_model, idata, data, cov, num_samples=30)
+        ds = prediction_samples(result)
+        assert "obs" in ds and set(ds["obs"].dims) == {"chain", "draw", "time"}
+
+    def test_prediction_samples_dataset_passthrough(self, fitted):
+        data, cov, idata = fitted
+        result = predict_in_sample(linear_model, idata, data, cov, num_samples=10)
+        ds = prediction_samples(result)
+        assert prediction_samples(ds) is ds
+
+    def test_prediction_samples_rejects_unknown_shapes(self, fitted):
+        _, _, idata = fitted
+        with pytest.raises(TypeError, match="cannot extract prediction samples"):
+            prediction_samples({"posterior": None})
+        with pytest.raises(TypeError, match="cannot extract prediction samples"):
+            prediction_samples(idata)  # a fit result, not a prediction result
 
 
 class TestPredictInSample:
