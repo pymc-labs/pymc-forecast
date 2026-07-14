@@ -82,7 +82,8 @@ optional extra: install with `pip install 'pymc-forecast[extras]'`.
 - **Dims and coords everywhere.** No positional axis conventions: variables carry
   named dims (`"time"`, `"time_future"`, `"obs"`, batch dims), results are
   `arviz.InferenceData` / `xarray` objects with real coordinates, and metrics are
-  dim-aware.
+  dim-aware. The [prediction output schema](docs/schema.md) is documented,
+  test-locked public API.
 - **Not AutoML.** No model zoo, no automatic feature pipelines — a clean path from
   a hand-written PyMC model to probabilistic forecasts and scores.
 - **Leverage the ecosystem.** ADVI/NUTS from PyMC core, Pathfinder and state-space

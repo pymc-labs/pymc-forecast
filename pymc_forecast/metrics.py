@@ -18,6 +18,8 @@ from collections.abc import Callable, Mapping
 import numpy as np
 import xarray as xr
 
+from pymc_forecast.data import SAMPLE_DIMS
+
 __all__ = [
     "DEFAULT_METRICS",
     "crps_empirical",
@@ -31,7 +33,7 @@ __all__ = [
     "make_mase",
 ]
 
-_SAMPLE_DIMS = ("chain", "draw", "sample")
+_SAMPLE_DIMS = (*SAMPLE_DIMS, "sample")
 """Dim names recognized as sample dimensions of labeled predictions."""
 
 Metric = Callable[..., float]
