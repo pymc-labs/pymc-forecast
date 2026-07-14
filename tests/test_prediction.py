@@ -64,6 +64,9 @@ class TestForecast:
         result = forecast(linear_model, idata, data, cov, num_samples=50, random_seed=SEED)
         predictions = result["predictions"]
         posterior_predictive = result["posterior_predictive"]
+        if hasattr(predictions, "to_dataset"):
+            predictions = predictions.to_dataset()
+            posterior_predictive = posterior_predictive.to_dataset()
         xr.testing.assert_identical(posterior_predictive, predictions)
         assert posterior_predictive["forecast"].dims == (
             "chain",
