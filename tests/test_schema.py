@@ -23,6 +23,8 @@ def test_public_name_constants():
     assert pymc_forecast.FUTURE_DIM == "time_future"
     assert pymc_forecast.OBS_VAR == "obs"
     assert pymc_forecast.FORECAST_VAR == "forecast"
+    assert pymc_forecast.MU_VAR == "mu"
+    assert pymc_forecast.MU_FORECAST_VAR == "mu_future"
     assert pymc_forecast.CHAIN_DIM == "chain"
     assert pymc_forecast.DRAW_DIM == "draw"
     assert pymc_forecast.SAMPLE_DIMS == ("chain", "draw")
@@ -76,12 +78,23 @@ class TestForecastSchema:
         pred = fc.forecast(null_covariates(index), num_samples=10, random_seed=SEED)["predictions"]
         assert pred["drift_future"].dims == ("chain", "draw", "time_future")
 
+    def test_latent_predictor_schema(self, univariate):
+        fc, index = univariate
+        pred = fc.forecast(null_covariates(index), num_samples=10, random_seed=SEED)["predictions"]
+        assert pred["mu_future"].dims == ("chain", "draw", "time_future")
+
     def test_batch_dims_follow_time(self, hierarchical):
         fc, cov = hierarchical
         result = fc.forecast(cov, num_samples=10, random_seed=SEED)
         forecast = result["predictions"]["forecast"]
         assert forecast.dims == ("chain", "draw", "time_future", "series")
         assert list(forecast["series"].values) == ["north", "south"]
+        assert result["predictions"]["mu_future"].dims == (
+            "chain",
+            "draw",
+            "time_future",
+            "series",
+        )
 
 
 class TestInSampleSchema:
@@ -98,6 +111,12 @@ class TestInSampleSchema:
         np.testing.assert_array_equal(
             result["posterior_predictive"]["time"].values, index[:T_OBS].values
         )
+
+    def test_latent_predictor_schema(self, univariate):
+        fc, _ = univariate
+        mu = fc.predict_in_sample(num_samples=15, random_seed=SEED)["posterior_predictive"]["mu"]
+        assert mu.dims == ("chain", "draw", "time")
+        assert mu.sizes == {"chain": 1, "draw": 15, "time": T_OBS}
 
 
 class TestPredictionSamplesRemap:

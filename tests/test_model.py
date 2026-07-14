@@ -12,7 +12,7 @@ from example_models import (
 
 from pymc_forecast.data import TIME_DIM
 from pymc_forecast.exceptions import HorizonError
-from pymc_forecast.model import Horizon, build_model
+from pymc_forecast.model import Horizon, build_model, predict
 
 
 class TestHorizon:
@@ -75,6 +75,21 @@ class TestBuildModel:
         with model:
             prior = pm.sample_prior_predictive(draws=10, random_seed=1)
         assert prior["prior"]["obs"].sizes["time"] == 35
+
+    def test_reserved_latent_predictor_name_has_clear_error(self):
+        def colliding_model(h, covariates):
+            latent = pm.Normal("mu", dims="time")
+            predict(
+                h,
+                lambda name, value, dims, observed: pm.Normal(
+                    name, value, 1, dims=dims, observed=observed
+                ),
+                latent,
+            )
+
+        data, cov = make_trend_data()
+        with pytest.raises(ValueError, match=r"reserves.*'mu'"):
+            build_model(colliding_model, data, cov)
 
 
 class TestForecastingModelFacade:

@@ -39,6 +39,8 @@ from pymc_forecast.priors import (
 
 __all__ = [
     "FORECAST_VAR",
+    "MU_FORECAST_VAR",
+    "MU_VAR",
     "OBS_VAR",
     "ForecastingModel",
     "Horizon",
@@ -52,6 +54,12 @@ OBS_VAR = "obs"
 
 FORECAST_VAR = "forecast"
 """Reserved name of the forecast-horizon variable registered by :func:`predict`."""
+
+MU_VAR = "mu"
+"""Reserved name of the in-sample latent predictor registered by :func:`predict`."""
+
+MU_FORECAST_VAR = "mu_future"
+"""Reserved name of the forecast latent predictor registered by :func:`predict`."""
 
 RVFactory = Callable[[str, tuple[str, ...]], pt.TensorVariable]
 """``(name, dims) -> RV``: creates a named model variable with exactly these dims."""
@@ -170,10 +178,13 @@ def predict(
     """Register the observation and forecast variables of the model.
 
     ``latent`` is the deterministic full-horizon predictor (time on axis 0).
-    The observed prefix becomes the likelihood (``"obs"``, dims
-    ``("time", *dims)``); when forecasting, the suffix becomes the unobserved
+    The observed prefix is exposed as the deterministic ``"mu"`` and becomes
+    the likelihood (``"obs"``, dims ``("time", *dims)``). When forecasting,
+    the suffix is exposed as ``"mu_future"`` and becomes the unobserved
     ``"forecast"`` variable (dims ``("time_future", *dims)``) that
-    ``pm.sample_posterior_predictive`` draws.
+    ``pm.sample_posterior_predictive`` draws. ``mu`` / ``mu_future`` are the
+    exact latent passed here; for a GLM this can be a linear predictor rather
+    than the observation distribution's mean.
 
     This single primitive covers both upstream ``predict`` (location-family
     noise: pass ``lambda name, mu, dims, observed: pm.Normal(name, mu, sigma,
@@ -204,10 +215,20 @@ def predict(
         obs_fn = prior_obs_factory(obs_fn, OBS_VAR)
     if dims is None:
         dims = () if h.data is None else tuple(d for d in h.data.dims if d != TIME_DIM)
+    model = pm.modelcontext(None)
+    reserved = [MU_VAR] + ([MU_FORECAST_VAR] if h.future > 0 else [])
+    collisions = [name for name in reserved if name in model.named_vars]
+    if collisions:
+        names = ", ".join(repr(name) for name in collisions)
+        msg = f"predict() reserves the latent predictor variable name(s) {names}"
+        raise ValueError(msg)
+
     observed = None if h.data is None else h.data.transpose(TIME_DIM, ...).values
-    obs_fn(OBS_VAR, latent[: h.t_obs], (TIME_DIM, *dims), observed)
+    mu = pm.Deterministic(MU_VAR, latent[: h.t_obs], dims=(TIME_DIM, *dims))
+    obs_fn(OBS_VAR, mu, (TIME_DIM, *dims), observed)
     if h.future > 0:
-        obs_fn(FORECAST_VAR, latent[h.t_obs :], (FUTURE_DIM, *dims), None)
+        mu_future = pm.Deterministic(MU_FORECAST_VAR, latent[h.t_obs :], dims=(FUTURE_DIM, *dims))
+        obs_fn(FORECAST_VAR, mu_future, (FUTURE_DIM, *dims), None)
 
 
 ModelFunction = Callable[[Horizon, xr.DataArray], None]

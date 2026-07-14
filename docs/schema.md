@@ -14,7 +14,7 @@ one predictive group:
 | Producer | Group | Contents |
 |---|---|---|
 | `forecast(...)` | `predictions` | out-of-sample forecasts |
-| `predict_in_sample(...)` | `posterior_predictive` | in-sample predictive of the observed variable |
+| `predict_in_sample(...)` | `posterior_predictive` | in-sample predictive and latent predictor |
 
 The group names follow the ArviZ convention (out-of-sample predictions live in
 `predictions`). {func}`pymc_forecast.prediction_samples` extracts the samples
@@ -26,7 +26,16 @@ The group names follow the ArviZ convention (out-of-sample predictions live in
 |---|---|---|---|
 | `obs` | {data}`pymc_forecast.OBS_VAR` | `posterior_predictive` | the observed (in-sample) variable |
 | `forecast` | {data}`pymc_forecast.FORECAST_VAR` | `predictions` | the forecast-horizon variable |
+| `mu` | {data}`pymc_forecast.MU_VAR` | `posterior_predictive` | the in-sample latent passed to `predict()`, before observation noise |
+| `mu_future` | {data}`pymc_forecast.MU_FORECAST_VAR` | `predictions` | the forecast-horizon latent passed to `predict()`, before observation noise |
 | `{name}_future` | — | `predictions` | forecast-horizon slice of each per-step latent registered with `time_series` |
+
+`mu` and `mu_future` contain the full draw-level expected trajectory used by
+the likelihood. More precisely, they are the exact latent passed to
+`predict()`: for GLM-style models this may be a linear predictor such as
+`eta`, not the observation distribution's mean after applying its link.
+These names are reserved by `predict()`; an existing model variable with the
+same name raises a clear error during model construction.
 
 The statespace adapter additionally exposes the latent state trajectories as
 `forecast_latent` in its `predictions` group.

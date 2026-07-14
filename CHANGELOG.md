@@ -6,6 +6,14 @@ The dim/coord/group/variable names on prediction outputs (documented in
 [docs/schema.md](docs/schema.md)) are public API: any change to them is a
 breaking change, made only in a minor release and called out here.
 
+## Unreleased
+
+- The standard prediction schema now includes draw-level, noise-free latent
+  predictors: `mu` in `posterior_predictive` and `mu_future` in
+  `predictions`. The public constants `MU_VAR` and `MU_FORECAST_VAR` expose
+  their reserved names; models already using either name must rename that
+  variable ([#36](https://github.com/pymc-labs/pymc-forecast/issues/36)).
+
 ## 0.1.0 (2026-07-14)
 
 Five features aimed at making the package cleanly wrappable as a model

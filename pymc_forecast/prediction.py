@@ -23,7 +23,13 @@ import xarray as xr
 
 from pymc_forecast.data import TIME_DIM, as_dataarray, null_covariates
 from pymc_forecast.exceptions import HorizonError
-from pymc_forecast.model import FORECAST_VAR, OBS_VAR, build_model
+from pymc_forecast.model import (
+    FORECAST_VAR,
+    MU_FORECAST_VAR,
+    MU_VAR,
+    OBS_VAR,
+    build_model,
+)
 
 __all__ = [
     "forecast",
@@ -115,8 +121,8 @@ def thin_draws(posterior, num_samples: int, random_seed=None) -> xr.Dataset:
 
 
 def _default_var_names(model: pm.Model) -> list[str]:
-    """The forecast variable plus every ``*_future`` latent, for the output."""
-    names = [FORECAST_VAR]
+    """The forecast, its latent predictor, and every ``*_future`` latent."""
+    names = [FORECAST_VAR, MU_FORECAST_VAR]
     names += [
         rv.name for rv in model.free_RVs if rv.name.endswith("_future") and rv.name != FORECAST_VAR
     ]
@@ -155,8 +161,8 @@ def forecast(
     num_samples
         If given, subsample the posterior to this many draws first.
     var_names
-        Variables to record. Default: ``"forecast"`` plus all ``*_future``
-        latents.
+        Variables to record. Default: ``"forecast"``, its noise-free latent
+        predictor ``"mu_future"``, plus all ``*_future`` latents.
     random_seed
         Seed for thinning and predictive sampling.
     progressbar
@@ -196,7 +202,7 @@ def predict_in_sample(
     random_seed=None,
     progressbar: bool = False,
 ):
-    """Sample the in-sample posterior predictive of the ``"obs"`` variable.
+    """Sample the in-sample posterior predictive and latent predictor.
 
     The in-sample counterpart of :func:`forecast`: the model is rebuilt over
     the observed window only (no forecast horizon) and the observed variable
@@ -215,7 +221,7 @@ def predict_in_sample(
     Returns
     -------
     DataTree
-        With a ``posterior_predictive`` group holding ``"obs"``.
+        With a ``posterior_predictive`` group holding ``"obs"`` and ``"mu"``.
     """
     data_da = as_dataarray(data, role="data")
     if covariates is None:
@@ -229,7 +235,7 @@ def predict_in_sample(
     return pm.sample_posterior_predictive(
         posterior_dataset(posterior),
         model=model,
-        var_names=[OBS_VAR],
+        var_names=[OBS_VAR, MU_VAR],
         random_seed=random_seed,
         progressbar=progressbar,
     )
