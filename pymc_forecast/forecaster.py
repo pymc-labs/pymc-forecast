@@ -8,8 +8,10 @@ then rebuilds the model over extended covariates and samples the horizon.
 """
 
 import abc
+import warnings
 from collections.abc import Mapping
 
+import numpy as np
 import pymc as pm
 import xarray as xr
 
@@ -36,6 +38,15 @@ __all__ = ["Forecaster", "HMCForecaster", "PathfinderForecaster"]
 
 DEFAULT_LEARNING_RATE = 0.01
 """Default Adam learning rate for variational fits (matches upstream)."""
+
+ADVI_CONVERGENCE_WINDOW_FRACTION = 0.1
+"""Fraction of the loss history used by each ADVI convergence window."""
+
+ADVI_CONVERGENCE_REL_TOL = 0.01
+"""Maximum relative loss improvement considered converged."""
+
+ADVI_CONVERGENCE_MIN_WINDOW = 10
+"""Minimum number of loss values in each convergence window."""
 
 
 class BaseForecaster(abc.ABC):
@@ -233,6 +244,14 @@ class Forecaster(BaseForecaster):
         The fitted ``pm.Approximation``.
     losses
         The ELBO loss history (one value per step).
+
+    Notes
+    -----
+    After fitting, convergence is checked by comparing mean loss in the final
+    10% of iterations with the preceding 10% (at least 10 values per window).
+    A :class:`UserWarning` is emitted if the relative improvement is greater
+    than 1%, because the objective is still materially descending. Inspect
+    :attr:`losses` directly as well; this heuristic cannot prove convergence.
     """
 
     def __init__(
@@ -271,6 +290,40 @@ class Forecaster(BaseForecaster):
             )
             raise MethodResolutionError(msg) from err
         self.losses = self.approx.hist
+        self._warn_if_not_converged()
+
+    def _warn_if_not_converged(self) -> None:
+        """Warn when the tail-window loss improvement remains material."""
+        losses = np.asarray(self.losses, dtype=float).reshape(-1)
+        window = max(
+            ADVI_CONVERGENCE_MIN_WINDOW,
+            int(losses.size * ADVI_CONVERGENCE_WINDOW_FRACTION),
+        )
+        if losses.size < 2 * window:
+            return
+
+        previous_mean = float(np.mean(losses[-2 * window : -window]))
+        final_mean = float(np.mean(losses[-window:]))
+        if not np.isfinite([previous_mean, final_mean]).all():
+            warnings.warn(
+                "ADVI convergence could not be assessed because the loss "
+                "history contains non-finite values.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return
+
+        scale = max(abs(previous_mean), np.finfo(float).eps)
+        relative_improvement = (previous_mean - final_mean) / scale
+        if relative_improvement > ADVI_CONVERGENCE_REL_TOL:
+            warnings.warn(
+                f"ADVI has not converged after {self._num_steps} steps: mean "
+                f"loss improved by {relative_improvement:.1%} between the "
+                "previous and final convergence windows; increase num_steps, "
+                "raise the learning rate, or use HMCForecaster.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     def draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
         """Draw ``num_samples`` posterior samples from the approximation."""

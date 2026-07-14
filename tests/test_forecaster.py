@@ -1,4 +1,7 @@
+import warnings
+
 import numpy as np
+import pymc as pm
 import pytest
 from example_models import (
     RandomWalkForecastingModel,
@@ -65,6 +68,29 @@ class TestForecasterVI:
         data, cov = make_trend_data()
         with pytest.raises(MethodResolutionError, match="unknown VI method"):
             Forecaster(linear_model, data, cov, method="not_a_method", num_steps=10)
+
+
+class TestADVIConvergenceWarning:
+    @staticmethod
+    def fit_with_losses(monkeypatch, losses):
+        class Approximation:
+            hist = np.asarray(losses)
+
+        monkeypatch.setattr(pm, "fit", lambda **kwargs: Approximation())
+        data, cov = make_trend_data(t_obs=20, horizon=0)
+        return Forecaster(linear_model, data, cov, num_steps=len(losses), random_seed=SEED)
+
+    def test_underfit_history_warns(self, monkeypatch):
+        losses = np.linspace(100.0, 50.0, 100)
+        with pytest.warns(UserWarning, match=r"not converged after 100 steps"):
+            self.fit_with_losses(monkeypatch, losses)
+
+    def test_converged_history_does_not_warn(self, monkeypatch):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self.fit_with_losses(monkeypatch, np.full(100, 50.0))
+        messages = [str(item.message) for item in caught]
+        assert not any("ADVI has not converged" in message for message in messages)
 
 
 class TestForecastByHorizon:

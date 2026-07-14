@@ -26,6 +26,7 @@ def model(h, covariates):
     )
 
 fc = Forecaster(model, train, num_steps=5_000, random_seed=0)   # ADVI
+print(fc.losses[-10:])                          # always inspect VI convergence
 idata = fc.forecast(horizon=8, num_samples=500, random_seed=0)
 forecast = idata["predictions"]["forecast"]     # dims: (chain, draw, time_future)
 
@@ -44,6 +45,14 @@ Swap {class}`~pymc_forecast.Forecaster` for {class}`~pymc_forecast.HMCForecaster
 (NUTS, with `nuts_sampler="nutpie"/"numpyro"/...`) or
 {class}`~pymc_forecast.PathfinderForecaster` (pymc-extras) — the fit/forecast
 interface is identical.
+
+`Forecaster` checks the tail of its ADVI loss history after fitting. It emits
+a `UserWarning` when mean loss in the final 10% of iterations is still more
+than 1% lower than in the preceding 10% (using at least 10 iterations per
+window). Treat that warning as an under-converged fit: increase `num_steps`,
+adjust the optimizer/learning rate, or use `HMCForecaster` for the
+accuracy-first path. The check is deliberately simple, so inspect
+`fc.losses` even when no warning is emitted.
 
 ## Covariates and richer latents
 

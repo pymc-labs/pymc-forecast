@@ -6,6 +6,13 @@ The dim/coord/group/variable names on prediction outputs (documented in
 [docs/schema.md](docs/schema.md)) are public API: any change to them is a
 breaking change, made only in a minor release and called out here.
 
+## Unreleased
+
+- `Forecaster` now warns when the tail of its ADVI loss history is still
+  materially descending, and the quickstart documents how to inspect VI
+  convergence and choose the HMC accuracy-first path
+  ([#38](https://github.com/pymc-labs/pymc-forecast/issues/38)).
+
 ## 0.1.0 (2026-07-14)
 
 Five features aimed at making the package cleanly wrappable as a model
