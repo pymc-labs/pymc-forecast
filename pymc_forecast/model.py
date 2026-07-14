@@ -39,6 +39,8 @@ from pymc_forecast.priors import (
 
 __all__ = [
     "FORECAST_VAR",
+    "MU_FORECAST_VAR",
+    "MU_VAR",
     "OBS_VAR",
     "ForecastingModel",
     "Horizon",
@@ -52,6 +54,15 @@ OBS_VAR = "obs"
 
 FORECAST_VAR = "forecast"
 """Reserved name of the forecast-horizon variable registered by :func:`predict`."""
+
+MU_VAR = "mu"
+"""Reserved name of the in-sample noise-free latent predictor registered by
+:func:`predict` — the latent passed to it, before observation noise (for
+GLM-style models this is the linear predictor, not the distribution mean)."""
+
+MU_FORECAST_VAR = "mu_future"
+"""Reserved name of the forecast-horizon noise-free latent predictor
+registered by :func:`predict` (see :data:`MU_VAR`)."""
 
 RVFactory = Callable[[str, tuple[str, ...]], pt.TensorVariable]
 """``(name, dims) -> RV``: creates a named model variable with exactly these dims."""
@@ -160,6 +171,17 @@ def time_series(
     return pt.concatenate([prefix, suffix], axis=0)
 
 
+def _register_mu(model: pm.Model, name: str, latent_slice, dims: tuple[str, ...]) -> None:
+    """Record a slice of the latent predictor as a named Deterministic.
+
+    The latent is broadcast to the variable's full shape so it mirrors the
+    observation variable even when the model body relies on broadcasting
+    (the likelihood broadcasts the latent the same way).
+    """
+    shape = [model.dim_lengths[d] for d in dims]
+    pm.Deterministic(name, pt.broadcast_to(latent_slice, shape), dims=dims)
+
+
 def predict(
     h: Horizon,
     obs_fn: ObsFactory,
@@ -174,6 +196,14 @@ def predict(
     ``("time", *dims)``); when forecasting, the suffix becomes the unobserved
     ``"forecast"`` variable (dims ``("time_future", *dims)``) that
     ``pm.sample_posterior_predictive`` draws.
+
+    The latent itself is also recorded, noise-free, as ``"mu"`` (in-sample)
+    and ``"mu_future"`` (forecast horizon) Deterministics — the documented
+    way to separate parameter/latent uncertainty from observation noise (see
+    ``docs/schema.md``). For GLM-style models this is the linear predictor
+    passed to ``predict``, not the distribution mean. The names ``"mu"`` and
+    ``"mu_future"`` are therefore reserved: a model body must not define
+    variables with these names.
 
     This single primitive covers both upstream ``predict`` (location-family
     noise: pass ``lambda name, mu, dims, observed: pm.Normal(name, mu, sigma,
@@ -205,9 +235,20 @@ def predict(
     if dims is None:
         dims = () if h.data is None else tuple(d for d in h.data.dims if d != TIME_DIM)
     observed = None if h.data is None else h.data.transpose(TIME_DIM, ...).values
+    model = pm.modelcontext(None)
+    taken = {MU_VAR, MU_FORECAST_VAR}.intersection(model.named_vars)
+    if taken:
+        msg = (
+            f"the model already defines {sorted(taken)}; predict() reserves "
+            f"'{MU_VAR}' and '{MU_FORECAST_VAR}' for the noise-free latent "
+            "predictor — rename the model variable"
+        )
+        raise HorizonError(msg)
     obs_fn(OBS_VAR, latent[: h.t_obs], (TIME_DIM, *dims), observed)
+    _register_mu(model, MU_VAR, latent[: h.t_obs], (TIME_DIM, *dims))
     if h.future > 0:
         obs_fn(FORECAST_VAR, latent[h.t_obs :], (FUTURE_DIM, *dims), None)
+        _register_mu(model, MU_FORECAST_VAR, latent[h.t_obs :], (FUTURE_DIM, *dims))
 
 
 ModelFunction = Callable[[Horizon, xr.DataArray], None]

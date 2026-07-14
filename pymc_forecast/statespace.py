@@ -165,7 +165,8 @@ class StatespaceForecaster(HMCForecaster):
         its ``statespace`` / ``priors`` methods).
     data
         Observed training data (univariate series or 2-d with a named series
-        dim).
+        dim), or ``None`` to construct unfitted and call
+        :meth:`~pymc_forecast.forecaster.BaseForecaster.fit` later.
     covariates
         Covariates covering (at least) the training window, passed through to
         the model definition; surplus future steps are ignored during fitting.
@@ -177,8 +178,12 @@ class StatespaceForecaster(HMCForecaster):
         ``"blackjax"``.
     random_seed
         Seed for the fit.
+    progressbar
+        Show the sampling progress bar.
     sample_kwargs
-        Extra keyword arguments for ``pm.sample``.
+        Extra keyword arguments for ``pm.sample``. ``progressbar`` is
+        accepted here for compatibility, but the direct argument is preferred
+        (passing both raises).
     build_kwargs
         Extra keyword arguments for ``build_statespace_graph``, such as
         ``mvn_method`` for the likelihood decomposition.
@@ -201,7 +206,7 @@ class StatespaceForecaster(HMCForecaster):
     def __init__(
         self,
         model_fn,
-        data,
+        data=None,
         covariates=None,
         *,
         draws: int = 1000,
@@ -209,6 +214,7 @@ class StatespaceForecaster(HMCForecaster):
         chains: int = 2,
         nuts_sampler: str = "pymc",
         random_seed=None,
+        progressbar: bool | None = None,
         sample_kwargs: Mapping | None = None,
         build_kwargs: Mapping | None = None,
         forecast_kwargs: Mapping | None = None,
@@ -234,6 +240,7 @@ class StatespaceForecaster(HMCForecaster):
             chains=chains,
             nuts_sampler=nuts_sampler,
             random_seed=random_seed,
+            progressbar=progressbar,
             sample_kwargs=sample_kwargs,
         )
 
@@ -319,11 +326,12 @@ class StatespaceForecaster(HMCForecaster):
     def forecast(
         self,
         covariates=None,
-        num_samples: int = 100,
+        num_samples: int | None = None,
         *,
         horizon: int | None = None,
         future_index=None,
         future_covariates=None,
+        posterior=None,
         var_names: Sequence[str] | None = None,
         random_seed=None,
         progressbar: bool = False,
@@ -353,7 +361,8 @@ class StatespaceForecaster(HMCForecaster):
             Covariates spanning training window + forecast horizon (time
             coords must extend the training data's).
         num_samples
-            Number of posterior draws (and forecast samples).
+            Number of posterior draws (and forecast samples); default 100.
+            Mutually exclusive with ``posterior``.
         horizon
             Number of steps to forecast past the training data.
         future_index
@@ -366,6 +375,12 @@ class StatespaceForecaster(HMCForecaster):
             lying after the training window; fed through as the forecast
             scenario. Structure (dims, covariate names and order) must match
             the training covariates.
+        posterior
+            A fixed posterior to condition on (any shape
+            :func:`~pymc_forecast.prediction.posterior_dataset` accepts,
+            typically from ``draw_posterior``); passing the same posterior to
+            ``predict_in_sample`` and ``forecast`` makes the calls
+            draw-coherent.
         var_names
             Subset of prediction variables to keep (``"forecast"``,
             ``"forecast_latent"``). Default: both.
@@ -379,6 +394,7 @@ class StatespaceForecaster(HMCForecaster):
             ``(chain, draw, time_future, ...)``) and the latent state
             trajectories as ``"forecast_latent"``.
         """
+        self._require_fitted()
         provided = sum(
             arg is not None for arg in (covariates, horizon, future_index, future_covariates)
         )
@@ -406,7 +422,7 @@ class StatespaceForecaster(HMCForecaster):
             )
             raise HorizonError(msg)
 
-        posterior = self.draw_posterior(num_samples, random_seed)
+        posterior = self._resolve_posterior(posterior, num_samples, random_seed)
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message=_NO_TIME_INDEX_MESSAGE)
             result = self.ss_mod.forecast(
@@ -437,8 +453,9 @@ class StatespaceForecaster(HMCForecaster):
 
     def predict_in_sample(
         self,
-        num_samples: int = 100,
+        num_samples: int | None = None,
         *,
+        posterior=None,
         random_seed=None,
         progressbar: bool = False,
     ) -> xr.DataTree:
@@ -448,13 +465,18 @@ class StatespaceForecaster(HMCForecaster):
         the full training window) — the statespace analogue of replaying
         in-sample latents and resampling the observation noise.
 
+        ``num_samples`` defaults to 100 and is mutually exclusive with
+        ``posterior``, a fixed posterior to condition on (see
+        :meth:`forecast` for the draw-coherence semantics).
+
         Returns
         -------
         DataTree
             With a ``posterior_predictive`` group holding ``"obs"`` (dims
             ``(chain, draw, time, ...)``).
         """
-        posterior = self.draw_posterior(num_samples, random_seed)
+        self._require_fitted()
+        posterior = self._resolve_posterior(posterior, num_samples, random_seed)
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message=_NO_TIME_INDEX_MESSAGE)
             result = self.ss_mod.sample_conditional_posterior(

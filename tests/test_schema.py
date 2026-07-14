@@ -23,6 +23,8 @@ def test_public_name_constants():
     assert pymc_forecast.FUTURE_DIM == "time_future"
     assert pymc_forecast.OBS_VAR == "obs"
     assert pymc_forecast.FORECAST_VAR == "forecast"
+    assert pymc_forecast.MU_VAR == "mu"
+    assert pymc_forecast.MU_FORECAST_VAR == "mu_future"
     assert pymc_forecast.CHAIN_DIM == "chain"
     assert pymc_forecast.DRAW_DIM == "draw"
     assert pymc_forecast.SAMPLE_DIMS == ("chain", "draw")
@@ -83,6 +85,20 @@ class TestForecastSchema:
         assert forecast.dims == ("chain", "draw", "time_future", "series")
         assert list(forecast["series"].values) == ["north", "south"]
 
+    def test_noise_free_mu_future(self, univariate):
+        fc, index = univariate
+        pred = fc.forecast(null_covariates(index), num_samples=10, random_seed=SEED)["predictions"]
+        assert pred["mu_future"].dims == ("chain", "draw", "time_future")
+        # noise-free: strictly narrower than the predictive draws
+        assert float(pred["mu_future"].std("draw").mean()) < float(
+            pred["forecast"].std("draw").mean()
+        )
+
+    def test_mu_future_carries_batch_dims(self, hierarchical):
+        fc, cov = hierarchical
+        pred = fc.forecast(cov, num_samples=10, random_seed=SEED)["predictions"]
+        assert pred["mu_future"].dims == ("chain", "draw", "time_future", "series")
+
 
 class TestInSampleSchema:
     def test_posterior_predictive_group_and_dims(self, univariate):
@@ -98,6 +114,18 @@ class TestInSampleSchema:
         np.testing.assert_array_equal(
             result["posterior_predictive"]["time"].values, index[:T_OBS].values
         )
+
+    def test_noise_free_mu(self, univariate):
+        fc, _ = univariate
+        result = fc.predict_in_sample(num_samples=15, random_seed=SEED)
+        mu = result["posterior_predictive"]["mu"]
+        assert mu.dims == ("chain", "draw", "time")
+        assert mu.sizes == {"chain": 1, "draw": 15, "time": T_OBS}
+
+    def test_mu_carries_batch_dims(self, hierarchical):
+        fc, _ = hierarchical
+        result = fc.predict_in_sample(num_samples=10, random_seed=SEED)
+        assert result["posterior_predictive"]["mu"].dims == ("chain", "draw", "time", "series")
 
 
 class TestPredictionSamplesRemap:

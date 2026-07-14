@@ -27,6 +27,7 @@ from pymc_forecast.exceptions import (
     BacktestWindowError,
     HorizonError,
     MethodResolutionError,
+    NotFittedError,
     OptionalDependencyError,
     PymcForecastError,
 )
@@ -52,6 +53,8 @@ from pymc_forecast.metrics import (
 )
 from pymc_forecast.model import (
     FORECAST_VAR,
+    MU_FORECAST_VAR,
+    MU_VAR,
     OBS_VAR,
     ForecastingModel,
     Horizon,
@@ -76,6 +79,8 @@ __all__ = [
     "DRAW_DIM",
     "FORECAST_VAR",
     "FUTURE_DIM",
+    "MU_FORECAST_VAR",
+    "MU_VAR",
     "OBS_VAR",
     "SAMPLE_DIMS",
     "TIME_DIM",
@@ -88,6 +93,7 @@ __all__ = [
     "Horizon",
     "HorizonError",
     "MethodResolutionError",
+    "NotFittedError",
     "OptionalDependencyError",
     "PathfinderForecaster",
     "PriorConfig",

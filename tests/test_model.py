@@ -1,5 +1,6 @@
 import numpy as np
 import pymc as pm
+import pytensor.tensor as pt
 import pytest
 from example_models import (
     RandomWalkForecastingModel,
@@ -12,7 +13,7 @@ from example_models import (
 
 from pymc_forecast.data import TIME_DIM
 from pymc_forecast.exceptions import HorizonError
-from pymc_forecast.model import Horizon, build_model
+from pymc_forecast.model import Horizon, build_model, predict, time_series
 
 
 class TestHorizon:
@@ -67,6 +68,51 @@ class TestBuildModel:
         data, cov = make_trend_data()
         with pytest.raises(HorizonError, match="no 'obs' variable"):
             build_model(no_predict, data, cov)
+
+    def test_registers_noise_free_mu(self):
+        data, cov = make_trend_data()
+        model = build_model(linear_model, data, cov)
+        assert {"mu", "mu_future"} <= set(model.named_vars)
+        train = build_model(linear_model, data, cov.isel({TIME_DIM: slice(None, 30)}))
+        assert "mu" in train.named_vars and "mu_future" not in train.named_vars
+
+    def test_mu_full_shape_for_batch_dims(self):
+        rng = np.random.default_rng(0)
+        data = rng.normal(size=(20, 3))
+        cov = np.zeros((25, 0))
+        model = build_model(hierarchical_model, data, cov)
+        assert model.named_vars["mu"].eval().shape == (20, 3)
+        assert model.named_vars["mu_future"].eval().shape == (5, 3)
+
+    def test_mu_broadcast_like_the_likelihood(self):
+        # a latent with a size-1 series axis broadcasts against the data in
+        # the likelihood; mu must be recorded at the same full shape
+        def broadcasting(h, covariates):
+            drift = time_series(h, "drift", lambda name, dims: pm.Normal(name, 0.0, 0.2, dims=dims))
+            sigma = pm.HalfNormal("sigma", 0.5)
+            predict(
+                h,
+                lambda name, m, dims, observed: pm.Normal(
+                    name, m, sigma, dims=dims, observed=observed
+                ),
+                pt.cumsum(drift)[:, None],
+            )
+
+        rng = np.random.default_rng(0)
+        data = rng.normal(size=(20, 3))
+        cov = np.zeros((25, 0))
+        model = build_model(broadcasting, data, cov)
+        assert model.named_vars["mu"].eval().shape == (20, 3)
+        assert model.named_vars["mu_future"].eval().shape == (5, 3)
+
+    def test_reserved_mu_name_collides(self):
+        def colliding(h, covariates):
+            pm.Normal("mu", 0.0, 1.0)
+            linear_model(h, covariates)
+
+        data, cov = make_trend_data()
+        with pytest.raises(HorizonError, match="reserves 'mu'"):
+            build_model(colliding, data, cov)
 
     def test_prior_only_build(self):
         _, cov = make_trend_data()

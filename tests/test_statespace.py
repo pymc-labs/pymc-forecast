@@ -229,6 +229,12 @@ class TestConstructionValidation:
         with pytest.raises(ValueError, match="adapter-managed"):
             StatespaceForecaster(LocalLevelStatespace(), data, forecast_kwargs={"periods": 3})
 
+    def test_deferred_construction_accepts_progressbar(self):
+        forecaster = StatespaceForecaster(LocalLevelStatespace(), progressbar=True)
+        assert forecaster._progressbar is True
+        assert not forecaster.is_fitted
+        assert forecaster.model is None
+
 
 class TestPredictInSample:
     def test_obs_with_time_coords(self, forecaster, data_and_cov):

@@ -1,5 +1,11 @@
+import inspect
+import warnings
+
 import numpy as np
+import pymc as pm
+import pytensor.tensor as pt
 import pytest
+import xarray as xr
 from example_models import (
     RandomWalkForecastingModel,
     linear_model,
@@ -8,10 +14,44 @@ from example_models import (
     random_walk_model,
 )
 
-from pymc_forecast.exceptions import AlignmentError, MethodResolutionError
-from pymc_forecast.forecaster import Forecaster, HMCForecaster, PathfinderForecaster
+from pymc_forecast.exceptions import AlignmentError, MethodResolutionError, NotFittedError
+from pymc_forecast.forecaster import (
+    BaseForecaster,
+    Forecaster,
+    HMCForecaster,
+    PathfinderForecaster,
+    _check_vi_convergence,
+)
+from pymc_forecast.model import predict
 
 SEED = 4242
+
+
+def deterministic_replay_model(h, covariates):
+    """Expose one posterior scalar across every time step without noise."""
+    value = pm.Normal("value")
+    latent = pt.repeat(value, h.duration)
+    predict(
+        h,
+        lambda name, x, dims, observed: pm.Deterministic(name, x, dims=dims),
+        latent,
+    )
+
+
+class StubForecaster(BaseForecaster):
+    """No-inference forecaster for exercising the shared base-class plumbing."""
+
+    def _fit(self, random_seed):
+        self.fit_seeds = getattr(self, "fit_seeds", [])
+        self.fit_seeds.append(random_seed)
+        self.draw_calls = []
+
+    def _draw_posterior(self, num_samples, random_seed=None):
+        self.draw_calls.append((num_samples, random_seed))
+        return xr.Dataset(
+            {"value": (("chain", "draw"), np.zeros((1, num_samples)))},
+            coords={"chain": [0], "draw": np.arange(num_samples)},
+        )
 
 
 class TestForecasterVI:
@@ -224,6 +264,205 @@ class TestConsistency:
             pred_mcmc["predictions"]["forecast"].mean(("chain", "draw")).values,
             atol=0.25,
         )
+
+
+class TestFixedPosterior:
+    """The posterior= passthrough: several predictive calls, one set of draws."""
+
+    @pytest.fixture(scope="class")
+    def fc(self):
+        data, cov = make_trend_data()
+        return Forecaster(linear_model, data, cov, num_steps=8_000, random_seed=SEED)
+
+    def test_calls_are_draw_coherent(self, fc):
+        # mu / mu_future are deterministic in the parameters, so with a fixed
+        # posterior both calls must reproduce it draw-for-draw.
+        _, cov = make_trend_data()
+        posterior = fc.draw_posterior(50, random_seed=SEED)
+        pre = fc.predict_in_sample(posterior=posterior, random_seed=SEED)
+        post = fc.forecast(cov, posterior=posterior, random_seed=SEED)
+
+        def expected(cov_slice):
+            mu = posterior["intercept"] + xr.dot(posterior["beta"], cov_slice, dim="covariate")
+            return mu.transpose("chain", "draw", "time").values
+
+        np.testing.assert_allclose(
+            pre["posterior_predictive"]["mu"].values,
+            expected(cov.isel(time=slice(None, 30))),
+            rtol=1e-5,
+        )
+        np.testing.assert_allclose(
+            post["predictions"]["mu_future"].values,
+            expected(cov.isel(time=slice(30, None))),
+            rtol=1e-5,
+        )
+
+    def test_matching_sample_sizes(self, fc):
+        _, cov = make_trend_data()
+        posterior = fc.draw_posterior(23, random_seed=SEED)
+        pre = fc.predict_in_sample(posterior=posterior)
+        post = fc.forecast(cov, posterior=posterior)
+        assert pre["posterior_predictive"]["obs"].sizes["draw"] == 23
+        assert post["predictions"]["forecast"].sizes["draw"] == 23
+
+    def test_accepts_any_posterior_shape(self, fc):
+        _, cov = make_trend_data()
+        idata = fc.approx.sample(draws=10, random_seed=SEED)  # InferenceData
+        pred = fc.forecast(cov, posterior=idata)
+        assert pred["predictions"]["forecast"].sizes["draw"] == 10
+
+    def test_num_samples_and_posterior_are_exclusive(self, fc):
+        _, cov = make_trend_data()
+        posterior = fc.draw_posterior(5, random_seed=SEED)
+        with pytest.raises(ValueError, match="not both"):
+            fc.forecast(cov, num_samples=5, posterior=posterior)
+        with pytest.raises(ValueError, match="not both"):
+            fc.predict_in_sample(num_samples=5, posterior=posterior)
+
+
+class TestFixedPosteriorPlumbing:
+    """Coordinate-exact posterior passthrough, checked without any inference."""
+
+    @pytest.fixture
+    def fc(self):
+        data = xr.DataArray([0.0, 0.0], dims="time", coords={"time": [0, 1]})
+        return StubForecaster(deterministic_replay_model, data)
+
+    @pytest.fixture
+    def posterior(self):
+        values = np.array([[-2.0, -1.0, 0.0], [1.0, 2.0, 3.0]])
+        return xr.Dataset(
+            {"value": (("chain", "draw"), values)},
+            coords={"chain": [4, 9], "draw": [10, 20, 30]},
+        )
+
+    def test_same_posterior_preserves_chain_and_draw_coords(self, fc, posterior):
+        inside = fc.predict_in_sample(posterior=posterior, random_seed=SEED)[
+            "posterior_predictive"
+        ]["obs"]
+        future = fc.forecast(horizon=2, posterior=posterior, random_seed=SEED)["predictions"][
+            "forecast"
+        ]
+        assert inside.sizes == {"chain": 2, "draw": 3, "time": 2}
+        assert future.sizes == {"chain": 2, "draw": 3, "time_future": 2}
+        for da in (inside, future):
+            np.testing.assert_array_equal(da["chain"], posterior["chain"])
+            np.testing.assert_array_equal(da["draw"], posterior["draw"])
+        np.testing.assert_array_equal(inside.isel(time=0), posterior["value"])
+        np.testing.assert_array_equal(future.isel(time_future=0), posterior["value"])
+        assert fc.draw_calls == []  # nothing drawn internally
+
+    def test_default_still_draws_one_hundred_samples(self, fc):
+        result = fc.predict_in_sample(random_seed=SEED)
+        assert result["posterior_predictive"]["obs"].sizes["draw"] == 100
+        assert fc.draw_calls == [(100, SEED)]
+
+
+class TestDeferredFit:
+    def test_lifecycle(self):
+        fc = StubForecaster(linear_model, random_seed=1)
+        assert not fc.is_fitted
+        assert fc.model is None
+        with pytest.raises(NotFittedError, match="not fitted"):
+            fc.predict_in_sample()
+        with pytest.raises(NotFittedError, match="not fitted"):
+            fc.forecast(horizon=2)
+        with pytest.raises(NotFittedError, match="not fitted"):
+            fc.draw_posterior(10)
+
+        data, cov = make_trend_data()
+        assert fc.fit(data, cov, random_seed=2) is fc
+        assert fc.is_fitted
+        assert fc.model is not None
+        assert fc.fit_seeds == [2]
+
+        fc.fit(data, cov)  # refit; falls back to the constructor seed
+        assert fc.fit_seeds == [2, 1]
+
+    def test_fit_after_construction(self):
+        data, cov = make_trend_data()
+        fc = Forecaster(linear_model, num_steps=2_000, random_seed=SEED)
+        assert fc.fit(data, cov) is fc
+        pred = fc.forecast(cov, num_samples=20, random_seed=SEED)
+        assert pred["predictions"]["forecast"].sizes["time_future"] == 5
+
+    def test_covariates_without_data_rejected(self):
+        _, cov = make_trend_data()
+        with pytest.raises(ValueError, match="without data"):
+            Forecaster(linear_model, covariates=cov)
+
+
+class TestUniformConstructorSurface:
+    def test_progressbar_accepted_by_every_forecaster(self):
+        from pymc_forecast.statespace import StatespaceForecaster
+
+        for cls in (Forecaster, HMCForecaster, PathfinderForecaster, StatespaceForecaster):
+            assert "progressbar" in inspect.signature(cls.__init__).parameters
+
+    def test_progressbar_kwarg_fits(self):
+        data, cov = make_trend_data()
+        fc = Forecaster(linear_model, data, cov, num_steps=100, progressbar=False)
+        assert len(np.asarray(fc.losses)) == 100
+        hmc = HMCForecaster(linear_model, data, cov, draws=20, tune=20, chains=2, progressbar=False)
+        assert hmc.idata.posterior.sizes["draw"] == 20
+
+    @pytest.mark.parametrize("cls", [Forecaster, HMCForecaster, PathfinderForecaster])
+    def test_progressbar_hoisted_without_fitting(self, cls):
+        fc = cls(linear_model, progressbar=True)
+        assert fc._progressbar is True
+        assert not fc.is_fitted
+
+    def test_legacy_kwargs_progressbar_still_supported(self):
+        fc = Forecaster(linear_model, fit_kwargs={"progressbar": True})
+        assert fc._progressbar is True
+        assert "progressbar" not in fc._fit_kwargs
+
+    def test_duplicate_progressbar_is_rejected(self):
+        with pytest.raises(ValueError, match="not both"):
+            HMCForecaster(
+                linear_model,
+                progressbar=False,
+                sample_kwargs={"progressbar": True},
+            )
+
+
+class TestConvergenceWarning:
+    def test_descending_loss_warns(self):
+        # a steady descent much larger than the noise floor
+        rng = np.random.default_rng(0)
+        losses = np.linspace(1000.0, 100.0, 2_000) + rng.normal(0, 1.0, 2_000)
+        with pytest.warns(UserWarning, match="has not converged"):
+            _check_vi_convergence(losses, 2_000)
+
+    def test_flat_noisy_loss_does_not_warn(self):
+        rng = np.random.default_rng(0)
+        losses = 50.0 + rng.normal(0, 5.0, 2_000)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _check_vi_convergence(losses, 2_000)
+
+    def test_short_history_is_skipped(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _check_vi_convergence(np.linspace(100.0, 0.0, 10), 10)
+
+    def test_non_finite_losses_warn_unassessable(self):
+        losses = np.linspace(1000.0, 100.0, 2_000)
+        losses[3] = np.nan
+        with pytest.warns(UserWarning, match="could not be assessed"):
+            _check_vi_convergence(losses, 2_000)
+
+    def test_underfit_forecaster_warns(self):
+        data, cov = make_trend_data()
+        with pytest.warns(UserWarning, match="has not converged"):
+            Forecaster(linear_model, data, cov, num_steps=300, random_seed=SEED)
+
+    def test_converged_forecaster_does_not_warn(self):
+        data, cov = make_trend_data()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            Forecaster(linear_model, data, cov, num_steps=10_000, optimizer=0.05, random_seed=SEED)
+        assert not [w for w in caught if "has not converged" in str(w.message)]
 
 
 class TestPathfinderForecaster:

@@ -1,5 +1,6 @@
 import numpy as np
 import pymc as pm
+import pytensor.tensor as pt
 import pytest
 import xarray as xr
 from example_models import linear_model, make_trend_data
@@ -16,6 +17,15 @@ from pymc_forecast.prediction import (
 )
 
 SEED = 99
+
+
+def custom_forecast_model(h, covariates):
+    """Register obs/forecast directly, without the standard predict() helper."""
+    level = pm.Normal("level")
+    observed = None if h.data is None else h.data.values
+    pm.Normal("obs", level, 1, observed=observed, dims="time")
+    if h.future:
+        pm.Deterministic("forecast", pt.repeat(level, h.future), dims="time_future")
 
 
 @pytest.fixture(scope="module")
@@ -72,6 +82,18 @@ class TestForecast:
         data, cov, idata = fitted
         with pytest.raises(HorizonError, match="no forecast horizon"):
             forecast(linear_model, idata, data, cov.isel({TIME_DIM: slice(None, 30)}))
+
+    def test_custom_forecast_model_without_mu_future(self):
+        # models that register obs/forecast themselves have no mu_future;
+        # the default var_names must not demand it
+        data, cov = make_trend_data()
+        posterior = xr.Dataset(
+            {"level": (("chain", "draw"), np.array([[1.0, 2.0]]))},
+            coords={"chain": [0], "draw": [0, 1]},
+        )
+        result = forecast(custom_forecast_model, posterior, data, cov, random_seed=SEED)
+        assert set(result["predictions"].data_vars) == {"forecast"}
+        assert result["predictions"]["forecast"].dims == ("chain", "draw", "time_future")
 
 
 class TestDrawLevelSamples:

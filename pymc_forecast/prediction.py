@@ -23,7 +23,7 @@ import xarray as xr
 
 from pymc_forecast.data import TIME_DIM, as_dataarray, null_covariates
 from pymc_forecast.exceptions import HorizonError
-from pymc_forecast.model import FORECAST_VAR, OBS_VAR, build_model
+from pymc_forecast.model import FORECAST_VAR, MU_FORECAST_VAR, MU_VAR, OBS_VAR, build_model
 
 __all__ = [
     "forecast",
@@ -115,11 +115,15 @@ def thin_draws(posterior, num_samples: int, random_seed=None) -> xr.Dataset:
 
 
 def _default_var_names(model: pm.Model) -> list[str]:
-    """The forecast variable plus every ``*_future`` latent, for the output."""
+    """The forecast variable, every ``*_future`` latent, and the noise-free
+    ``mu_future`` predictor (a Deterministic, so collected explicitly), for
+    the output."""
     names = [FORECAST_VAR]
     names += [
         rv.name for rv in model.free_RVs if rv.name.endswith("_future") and rv.name != FORECAST_VAR
     ]
+    if MU_FORECAST_VAR in model.named_vars:
+        names.append(MU_FORECAST_VAR)
     return names
 
 
@@ -155,8 +159,10 @@ def forecast(
     num_samples
         If given, subsample the posterior to this many draws first.
     var_names
-        Variables to record. Default: ``"forecast"`` plus all ``*_future``
-        latents.
+        Variables to record. Default: ``"forecast"``, all ``*_future``
+        latents, and — for models registered through
+        :func:`~pymc_forecast.model.predict` — the noise-free ``"mu_future"``
+        predictor.
     random_seed
         Seed for thinning and predictive sampling.
     progressbar
@@ -200,7 +206,9 @@ def predict_in_sample(
 
     The in-sample counterpart of :func:`forecast`: the model is rebuilt over
     the observed window only (no forecast horizon) and the observed variable
-    is resampled given replayed latents.
+    is resampled given replayed latents. For models registered through
+    :func:`~pymc_forecast.model.predict`, the noise-free ``"mu"`` predictor
+    is recorded alongside ``"obs"``.
 
     Parameters
     ----------
@@ -226,10 +234,13 @@ def predict_in_sample(
     model = build_model(model_fn, data_da, cov_da)
     if num_samples is not None:
         posterior = thin_draws(posterior, num_samples, random_seed)
+    var_names = [OBS_VAR]
+    if MU_VAR in model.named_vars:
+        var_names.append(MU_VAR)
     return pm.sample_posterior_predictive(
         posterior_dataset(posterior),
         model=model,
-        var_names=[OBS_VAR],
+        var_names=var_names,
         random_seed=random_seed,
         progressbar=progressbar,
     )

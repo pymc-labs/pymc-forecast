@@ -38,12 +38,44 @@ results = backtest(y, None, model, min_train_window=48, test_window=4, stride=4,
                    num_samples=200, forecaster_options={"num_steps": 3_000}, random_seed=0)
 ```
 
+## Check VI convergence
+
+{class}`~pymc_forecast.Forecaster` uses mean-field ADVI, which can
+underconverge silently and hand back confidently wrong forecasts. A post-fit
+heuristic warns when the ELBO loss is still clearly descending, but its
+absence is not proof of convergence — inspect `fc.losses` and confirm it has
+plateaued before trusting results. Increase `num_steps`, raise the learning
+rate (`optimizer=0.05`), or switch to {class}`~pymc_forecast.HMCForecaster`
+when accuracy matters more than speed.
+
 ## Other inference backends
 
 Swap {class}`~pymc_forecast.Forecaster` for {class}`~pymc_forecast.HMCForecaster`
 (NUTS, with `nuts_sampler="nutpie"/"numpyro"/...`) or
 {class}`~pymc_forecast.PathfinderForecaster` (pymc-extras) — the fit/forecast
-interface is identical.
+interface is identical. Every forecaster (including
+{class}`~pymc_forecast.StatespaceForecaster`) accepts `progressbar=` directly,
+so backends can be swapped without moving that option into `fit_kwargs`,
+`sample_kwargs`, or `pathfinder_kwargs`:
+
+```python
+fc = HMCForecaster(model, train, draws=1_000, progressbar=True)
+```
+
+For configure-now / fit-later lifecycles (sklearn-style adapters), omit the
+data at construction and call `fit()` explicitly — passing data to the
+constructor remains the equivalent one-step path:
+
+```python
+fc = Forecaster(model, num_steps=5_000, progressbar=False)
+# store or pass `fc` as a configured object, then fit when data is available
+fc.fit(train, random_seed=0)
+idata = fc.forecast(horizon=8, num_samples=500)
+```
+
+The same object can be refit; its backend configuration is reused. Predictive
+methods raise {class}`~pymc_forecast.NotFittedError` until `fit()` has
+completed, and `fc.is_fitted` reports the state.
 
 ## Covariates and richer latents
 
