@@ -6,7 +6,7 @@ The dim/coord/group/variable names on prediction outputs (documented in
 [docs/schema.md](docs/schema.md)) are public API: any change to them is a
 breaking change, made only in a minor release and called out here.
 
-## Unreleased
+## 0.2.0 (2026-07-14)
 
 - Schema addition — noise-free latent predictor: prediction outputs of models
   registered through `predict()` now carry the draw-level latent before

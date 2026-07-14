@@ -71,7 +71,7 @@ from pymc_forecast.prediction import (
 from pymc_forecast.priors import PriorConfig
 from pymc_forecast.statespace import StatespaceForecaster, StatespaceModel
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "CHAIN_DIM",
