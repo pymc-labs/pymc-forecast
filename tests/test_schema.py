@@ -70,9 +70,7 @@ class TestForecastSchema:
 
     def test_future_latents_share_the_schema(self, univariate):
         fc, index = univariate
-        pred = fc.forecast(null_covariates(index), num_samples=10, random_seed=SEED)[
-            "predictions"
-        ]
+        pred = fc.forecast(null_covariates(index), num_samples=10, random_seed=SEED)["predictions"]
         assert pred["drift_future"].dims == ("chain", "draw", "time_future")
 
     def test_batch_dims_follow_time(self, hierarchical):
