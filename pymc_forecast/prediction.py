@@ -122,7 +122,9 @@ def thin_draws(posterior, num_samples: int, random_seed=None) -> xr.Dataset:
 
 def _default_var_names(model: pm.Model) -> list[str]:
     """The forecast, its latent predictor, and every ``*_future`` latent."""
-    names = [FORECAST_VAR, MU_FORECAST_VAR]
+    names = [FORECAST_VAR]
+    if MU_FORECAST_VAR in model.named_vars:
+        names.append(MU_FORECAST_VAR)
     names += [
         rv.name for rv in model.free_RVs if rv.name.endswith("_future") and rv.name != FORECAST_VAR
     ]
