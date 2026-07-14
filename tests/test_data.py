@@ -4,6 +4,11 @@ import pytest
 import xarray as xr
 
 from pymc_forecast.data import (
+    CHAIN_DIM,
+    DRAW_DIM,
+    FUTURE_DIM,
+    SAMPLE_DIMS,
+    TIME_DIM,
     as_dataarray,
     extend_time_index,
     null_covariates,
@@ -13,6 +18,15 @@ from pymc_forecast.exceptions import AlignmentError
 
 
 class TestAsDataarray:
+    def test_public_dimension_names(self):
+        assert (CHAIN_DIM, DRAW_DIM, TIME_DIM, FUTURE_DIM) == (
+            "chain",
+            "draw",
+            "time",
+            "time_future",
+        )
+        assert SAMPLE_DIMS == (CHAIN_DIM, DRAW_DIM)
+
     def test_numpy_1d(self):
         da = as_dataarray(np.arange(5.0))
         assert da.dims == ("time",)

@@ -30,6 +30,8 @@ import pymc as pm
 import xarray as xr
 
 from pymc_forecast.data import (
+    CHAIN_DIM,
+    DRAW_DIM,
     FUTURE_DIM,
     TIME_DIM,
     as_dataarray,
@@ -278,7 +280,7 @@ class StatespaceForecaster(HMCForecaster):
             else:
                 da = da.rename({OBSERVED_STATE_DIM: series_dim})
                 da = da.assign_coords({series_dim: self._data[series_dim].values})
-        sample_dims = [d for d in ("chain", "draw") if d in da.dims]
+        sample_dims = [d for d in (CHAIN_DIM, DRAW_DIM) if d in da.dims]
         return da.transpose(*sample_dims, time_dim, ...)
 
     def _scenario(self, future_covariates: xr.DataArray):

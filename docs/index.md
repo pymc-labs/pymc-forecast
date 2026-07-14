@@ -43,6 +43,7 @@ forecast = idata["predictions"]["forecast"]               # dims: (chain, draw, 
 
 **[Start with the full workflow →](quickstart.md)** ·
 **[Browse the examples →](examples/index.md)** ·
+**[Prediction schema →](prediction-schema.md)** ·
 **[API reference →](api/index.md)**
 
 ## Design principles
@@ -66,6 +67,7 @@ forecast = idata["predictions"]["forecast"]               # dims: (chain, draw, 
 :maxdepth: 2
 
 quickstart
+prediction-schema
 examples/index
 api/index
 ```

@@ -14,7 +14,13 @@ import numpy as np
 import pymc as pm
 import xarray as xr
 
-from pymc_forecast.data import TIME_DIM, as_dataarray, null_covariates
+from pymc_forecast.data import (
+    CHAIN_DIM,
+    DRAW_DIM,
+    TIME_DIM,
+    as_dataarray,
+    null_covariates,
+)
 from pymc_forecast.exceptions import HorizonError
 from pymc_forecast.model import FORECAST_VAR, OBS_VAR, build_model
 
@@ -50,18 +56,18 @@ def thin_draws(posterior, num_samples: int, random_seed=None) -> xr.Dataset:
     if num_samples <= 0:
         msg = f"num_samples must be positive, got {num_samples}"
         raise ValueError(msg)
-    ds = posterior_dataset(posterior).stack(__sample__=("chain", "draw"))
+    ds = posterior_dataset(posterior).stack(__sample__=(CHAIN_DIM, DRAW_DIM))
     total = ds.sizes["__sample__"]
     rng = np.random.default_rng(random_seed)
     index = rng.choice(total, size=num_samples, replace=num_samples > total)
     return (
         ds.isel(__sample__=index)
         .reset_index("__sample__")
-        .drop_vars(["chain", "draw"], errors="ignore")
-        .rename({"__sample__": "draw"})
-        .assign_coords(draw=np.arange(num_samples))
-        .expand_dims(chain=[0])
-        .transpose("chain", "draw", ...)
+        .drop_vars([CHAIN_DIM, DRAW_DIM], errors="ignore")
+        .rename({"__sample__": DRAW_DIM})
+        .assign_coords({DRAW_DIM: np.arange(num_samples)})
+        .expand_dims({CHAIN_DIM: [0]})
+        .transpose(CHAIN_DIM, DRAW_DIM, ...)
     )
 
 

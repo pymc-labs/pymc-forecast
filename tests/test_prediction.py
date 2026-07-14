@@ -1,12 +1,13 @@
 import numpy as np
 import pymc as pm
+import pytensor.tensor as pt
 import pytest
 import xarray as xr
 from example_models import linear_model, make_trend_data
 
-from pymc_forecast.data import TIME_DIM
+from pymc_forecast.data import CHAIN_DIM, DRAW_DIM, FUTURE_DIM, TIME_DIM, null_covariates
 from pymc_forecast.exceptions import HorizonError
-from pymc_forecast.model import build_model
+from pymc_forecast.model import build_model, predict
 from pymc_forecast.prediction import (
     forecast,
     posterior_dataset,
@@ -58,6 +59,34 @@ class TestForecast:
         assert pred["forecast"].sizes["time_future"] == 5
         np.testing.assert_array_equal(pred["time_future"].values, np.arange(30, 35))
         assert pred["forecast"].sizes["draw"] == 50
+        assert pred["forecast"].dims == (CHAIN_DIM, DRAW_DIM, FUTURE_DIM)
+
+    def test_multivariate_schema_preserves_named_series_coord(self):
+        def multivariate_model(h, covariates):
+            pm.Normal("dummy")
+            mu = pt.zeros((h.duration, 2))
+            predict(
+                h,
+                lambda name, m, dims, observed: pm.Normal(name, m, 1, dims=dims, observed=observed),
+                mu,
+                dims=("series",),
+            )
+
+        data = xr.DataArray(
+            np.zeros((3, 2)),
+            dims=(TIME_DIM, "series"),
+            coords={TIME_DIM: [10, 11, 12], "series": ["control", "treated"]},
+        )
+        covariates = null_covariates([10, 11, 12, 20, 21])
+        posterior = xr.Dataset(
+            {"dummy": ((CHAIN_DIM, DRAW_DIM), np.zeros((1, 4)))},
+            coords={CHAIN_DIM: [0], DRAW_DIM: np.arange(4)},
+        )
+        result = forecast(multivariate_model, posterior, data, covariates)
+        draws = result["predictions"]["forecast"]
+        assert draws.dims == (CHAIN_DIM, DRAW_DIM, FUTURE_DIM, "series")
+        np.testing.assert_array_equal(draws[FUTURE_DIM], [20, 21])
+        np.testing.assert_array_equal(draws["series"], ["control", "treated"])
 
     def test_recovers_known_trend(self, fitted):
         # data = 1 + 2 * trend + noise; the forecast must track the truth.
@@ -80,6 +109,7 @@ class TestPredictInSample:
             linear_model, idata, data, cov, num_samples=100, random_seed=SEED
         )
         ppc = result["posterior_predictive"]["obs"]
+        assert ppc.dims == (CHAIN_DIM, DRAW_DIM, TIME_DIM)
         assert ppc.sizes["time"] == 30
         resid = ppc.mean(("chain", "draw")).values - data.values
         assert np.abs(resid).mean() < 0.15

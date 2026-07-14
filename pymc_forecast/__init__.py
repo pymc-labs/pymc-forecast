@@ -6,7 +6,10 @@ results, and inference via PyMC core and pymc-extras.
 """
 
 from pymc_forecast.data import (
+    CHAIN_DIM,
+    DRAW_DIM,
     FUTURE_DIM,
+    SAMPLE_DIMS,
     TIME_DIM,
     as_dataarray,
     extend_time_index,
@@ -62,8 +65,11 @@ from pymc_forecast.statespace import StatespaceForecaster, StatespaceModel
 __version__ = "0.0.1"
 
 __all__ = [
+    "CHAIN_DIM",
     "DEFAULT_METRICS",
+    "DRAW_DIM",
     "FUTURE_DIM",
+    "SAMPLE_DIMS",
     "TIME_DIM",
     "AlignmentError",
     "BacktestResult",
