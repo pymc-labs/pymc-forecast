@@ -19,9 +19,7 @@ SEED = 20260714
 
 def prior_model(h, covariates):
     """Random-walk model written entirely with Prior objects."""
-    drift = time_series(
-        h, "drift", Prior("Normal", mu=Prior("Normal", mu=0, sigma=1), sigma=0.1)
-    )
+    drift = time_series(h, "drift", Prior("Normal", mu=Prior("Normal", mu=0, sigma=1), sigma=0.1))
     predict(h, Prior("Normal", sigma=Prior("HalfNormal", sigma=0.5)), pt.cumsum(drift))
 
 
