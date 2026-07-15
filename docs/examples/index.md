@@ -17,6 +17,9 @@ Executed end-to-end and re-run in CI with reduced sampling settings.
 - [Local level two ways](scan_vs_statespace_local_level.ipynb) — scan-based Markov
   latents vs. the `pymc-extras` statespace backend on the same model: posterior
   quality, runtime, and a shared backtest.
+- [Retail demand under stockouts](fresh_retail_stockout.ipynb) — a 50,000-series
+  FreshRetailNet panel fit with JAX ADVI on GPU, memory-bounded posterior draws,
+  holdout evaluation, and a full-availability demand scenario.
 
 ```{toctree}
 :hidden:
@@ -27,4 +30,5 @@ hierarchical_forecasting
 victoria_electricity
 exponential_smoothing_state_space
 scan_vs_statespace_local_level
+fresh_retail_stockout
 ```

@@ -6,6 +6,15 @@ The dim/coord/group/variable names on prediction outputs (documented in
 [docs/schema.md](docs/schema.md)) are public API: any change to them is a
 breaking change, made only in a minor release and called out here.
 
+## Unreleased
+
+- GPU variational inference: `Forecaster(..., backend="jax")` optimizes PyMC's
+  mean-field ADVI objective with a JAX-native `lax.scan` and returns the usual
+  PyMC approximation. `draw_posterior(..., batch_size=N)` bounds posterior
+  allocations for wide panels. The new FreshRetailNet-50K example combines
+  these paths to forecast censored retail sales and full-availability demand
+  ([#47](https://github.com/pymc-labs/pymc-forecast/issues/47)).
+
 ## 0.2.0 (2026-07-14)
 
 - Schema addition — noise-free latent predictor: prediction outputs of models
