@@ -359,6 +359,15 @@ class TestFixedPosterior:
         assert posterior.sizes["draw"] == 23
         np.testing.assert_array_equal(posterior["draw"], np.arange(23))
 
+    def test_batched_posterior_draws_are_distinct_across_chunks(self, fc):
+        # The batching threads one Generator through every chunk so each chunk
+        # is drawn off a freshly advanced seed. If the RNG were not consumed
+        # between chunks, every chunk would repeat the same draws. batch_size=1
+        # makes each draw its own chunk, so this pins the across-chunk advance.
+        posterior = fc.draw_posterior(4, random_seed=SEED, batch_size=1)
+        intercept = posterior["intercept"].values.ravel()
+        assert len(np.unique(intercept)) == 4
+
     def test_accepts_any_posterior_shape(self, fc):
         _, cov = make_trend_data()
         idata = fc.approx.sample(draws=10, random_seed=SEED)  # InferenceData

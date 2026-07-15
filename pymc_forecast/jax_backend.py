@@ -19,6 +19,13 @@ def fit_advi_jax(model, *, num_steps: int, learning_rate: float, random_seed=Non
 
     Returns the ordinary PyMC ``MeanField`` approximation, so posterior draws
     and every downstream Forecaster operation remain backend-independent.
+
+    .. note::
+       This sets JAX's process-wide ``jax_enable_x64`` flag to match
+       PyTensor's ``floatX`` (enabling it for ``float64``, disabling it
+       otherwise) so JAX does not silently truncate PyMC's initial point.
+       The flag is global, so it also affects any other JAX code in the
+       same process.
     """
     try:
         import jax
@@ -67,14 +74,16 @@ def fit_advi_jax(model, *, num_steps: int, learning_rate: float, random_seed=Non
     @jax.jit
     def optimize(mu, rho, key):
         def step(carry, index):
-            mu, rho, mu_m, rho_m, mu_v, rho_v, key = carry
+            mu, rho, mu_m, rho_m, mu_v, rho_v, last_loss, key = carry
             key, subkey = jax.random.split(key)
             loss, (mu_grad, rho_grad) = jax.value_and_grad(loss_fn, argnums=(0, 1))(mu, rho, subkey)
 
-            # Skip non-finite steps instead of poisoning the Adam state: one
-            # pathological ELBO sample (an overflow at an extreme draw) would
-            # otherwise turn every later iterate into NaN. pm.fit's PyTensor
-            # path survives the same event, so match it.
+            # Neutralize non-finite steps instead of poisoning the Adam state:
+            # one pathological ELBO sample (an overflow at an extreme draw)
+            # would otherwise turn every later iterate into NaN. On such a step
+            # the gradient is zeroed, so the parameters only drift by the
+            # decaying Adam momentum rather than taking a real update.
+            # pm.fit's PyTensor path survives the same event, so match it.
             finite = jnp.isfinite(loss) & jnp.isfinite(mu_grad).all() & jnp.isfinite(rho_grad).all()
             mu_grad = jnp.where(finite, mu_grad, 0.0)
             rho_grad = jnp.where(finite, rho_grad, 0.0)
@@ -89,10 +98,13 @@ def fit_advi_jax(model, *, num_steps: int, learning_rate: float, random_seed=Non
             )
             mu = mu - step_size * mu_m / (jnp.sqrt(mu_v) + epsilon)
             rho = rho - step_size * rho_m / (jnp.sqrt(rho_v) + epsilon)
-            return (mu, rho, mu_m, rho_m, mu_v, rho_v, key), loss
+            # Carry the last finite loss into the history so a skipped step
+            # does not leave a NaN in ``approx.hist`` for the convergence check.
+            recorded = jnp.where(finite, loss, last_loss)
+            return (mu, rho, mu_m, rho_m, mu_v, rho_v, recorded, key), recorded
 
         zeros = jnp.zeros_like(mu)
-        initial = (mu, rho, zeros, zeros, zeros, zeros, key)
+        initial = (mu, rho, zeros, zeros, zeros, zeros, jnp.asarray(jnp.inf, mu.dtype), key)
         final, losses = jax.lax.scan(step, initial, jnp.arange(num_steps))
         return final[0], final[1], losses
 
