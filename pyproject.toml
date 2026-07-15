@@ -28,6 +28,7 @@ dependencies = [
 [project.optional-dependencies]
 dataframes = ["pandas"]
 extras = ["pymc-extras>=0.10"]
+jax = ["jax"]
 
 [project.urls]
 Repository = "https://github.com/pymc-labs/pymc-forecast"
@@ -47,8 +48,10 @@ docs = [
     "sphinx-copybutton",
 ]
 notebooks = [
+    "jax",
     "matplotlib",
     "pandas",
+    "polars",
     "ipykernel",
     "nbconvert",
 ]

@@ -107,6 +107,44 @@ class TestForecasterVI:
             Forecaster(linear_model, data, cov, method="not_a_method", num_steps=10)
 
 
+class TestJAXForecasterVI:
+    def test_end_to_end(self):
+        pytest.importorskip("jax")
+        data, cov = make_trend_data()
+        fc = Forecaster(
+            linear_model,
+            data,
+            cov,
+            backend="jax",
+            optimizer=0.01,
+            num_steps=20,
+            random_seed=SEED,
+        )
+
+        assert len(fc.losses) == 20
+        assert np.isfinite(fc.losses).all()
+        posterior = fc.draw_posterior(9, random_seed=SEED, batch_size=4)
+        assert posterior.sizes["draw"] == 9
+
+    @pytest.mark.parametrize("backend", ["numpyro", "gpu", "JAX"])
+    def test_unknown_backend_rejected(self, backend):
+        with pytest.raises(MethodResolutionError, match="unknown VI backend"):
+            Forecaster(linear_model, backend=backend)
+
+    def test_backend_requires_mean_field_advi(self):
+        with pytest.raises(MethodResolutionError, match="method='advi'"):
+            Forecaster(linear_model, backend="jax", method="fullrank_advi")
+
+    @pytest.mark.parametrize("optimizer", [0, -0.1, "adam", pm.adam()])
+    def test_backend_requires_scalar_learning_rate(self, optimizer):
+        with pytest.raises(MethodResolutionError, match="positive learning rate"):
+            Forecaster(linear_model, backend="jax", optimizer=optimizer)
+
+    def test_backend_rejects_pymc_fit_kwargs(self):
+        with pytest.raises(MethodResolutionError, match="fit_kwargs"):
+            Forecaster(linear_model, backend="jax", fit_kwargs={"obj_n_mc": 2})
+
+
 class TestForecastByHorizon:
     """The covariate-free horizon= shortcut on a random-walk model."""
 
@@ -305,6 +343,31 @@ class TestFixedPosterior:
         assert pre["posterior_predictive"]["obs"].sizes["draw"] == 23
         assert post["predictions"]["forecast"].sizes["draw"] == 23
 
+    def test_vi_posterior_can_be_drawn_in_host_batches(self, fc, monkeypatch):
+        calls = []
+        draw = fc._draw_posterior
+
+        def record(size, random_seed=None):
+            calls.append(size)
+            return draw(size, random_seed)
+
+        monkeypatch.setattr(fc, "_draw_posterior", record)
+        posterior = fc.draw_posterior(23, random_seed=SEED, batch_size=7)
+
+        assert calls == [7, 7, 7, 2]
+        assert posterior.sizes["chain"] == 1
+        assert posterior.sizes["draw"] == 23
+        np.testing.assert_array_equal(posterior["draw"], np.arange(23))
+
+    def test_batched_posterior_draws_are_distinct_across_chunks(self, fc):
+        # The batching threads one Generator through every chunk so each chunk
+        # is drawn off a freshly advanced seed. If the RNG were not consumed
+        # between chunks, every chunk would repeat the same draws. batch_size=1
+        # makes each draw its own chunk, so this pins the across-chunk advance.
+        posterior = fc.draw_posterior(4, random_seed=SEED, batch_size=1)
+        intercept = posterior["intercept"].values.ravel()
+        assert len(np.unique(intercept)) == 4
+
     def test_accepts_any_posterior_shape(self, fc):
         _, cov = make_trend_data()
         idata = fc.approx.sample(draws=10, random_seed=SEED)  # InferenceData
@@ -356,6 +419,10 @@ class TestFixedPosteriorPlumbing:
         result = fc.predict_in_sample(random_seed=SEED)
         assert result["posterior_predictive"]["obs"].sizes["draw"] == 100
         assert fc.draw_calls == [(100, SEED)]
+
+    def test_nonpositive_posterior_batch_size_rejected(self, fc):
+        with pytest.raises(ValueError, match="batch_size must be positive"):
+            fc.draw_posterior(5, batch_size=0)
 
 
 class TestDeferredFit:
