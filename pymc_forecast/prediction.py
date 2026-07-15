@@ -118,13 +118,20 @@ def _chunk_seeds(random_seed, num_chunks: int) -> list:
     """Derive one independent per-chunk seed from the caller's seed.
 
     ``None`` stays ``None`` per chunk (non-deterministic, matching the
-    unbatched semantics); a ``numpy`` ``Generator`` draws the chunk seeds; an
-    integer seed spawns them deterministically via ``SeedSequence``.
+    unbatched semantics); a ``numpy`` ``Generator`` or legacy ``RandomState``
+    draws the chunk seeds off its own stream; an integer seed spawns them
+    deterministically via ``SeedSequence``.
     """
     if random_seed is None:
         return [None] * num_chunks
     if isinstance(random_seed, np.random.Generator):
         return [int(s) for s in random_seed.integers(0, 2**63, size=num_chunks)]
+    if isinstance(random_seed, np.random.RandomState):
+        # ``SeedSequence`` cannot wrap a legacy ``RandomState``; draw the chunk
+        # seeds directly (``randint`` high is bounded by ``2**31 - 1``). This
+        # mirrors ``draw_posterior``'s ``RandomState`` support on the posterior
+        # side so both batching knobs accept the same seed types.
+        return [int(s) for s in random_seed.randint(0, 2**31 - 1, size=num_chunks)]
     children = np.random.SeedSequence(random_seed).spawn(num_chunks)
     return [int(child.generate_state(1)[0]) for child in children]
 

@@ -210,6 +210,24 @@ class TestBatchedPrediction:
         with pytest.raises(ValueError, match="batch_size must be a positive integer"):
             forecast(linear_model, idata, data, cov, num_samples=10, batch_size=0)
 
+    def test_batched_forecast_accepts_random_state_seed(self, fitted):
+        # a legacy RandomState must work on the predictive batch path just as
+        # it does on draw_posterior; SeedSequence cannot wrap one, so the chunk
+        # seeds are drawn off the RandomState directly.
+        data, cov, idata = fitted
+        result = forecast(
+            linear_model,
+            idata,
+            data,
+            cov,
+            num_samples=30,
+            batch_size=7,
+            random_seed=np.random.RandomState(SEED),
+        )
+        fc = result["predictions"]["forecast"]
+        assert fc.sizes["draw"] == 30
+        np.testing.assert_array_equal(fc["draw"].values, np.arange(30))
+
 
 class TestPredictInSample:
     def test_obs_group_and_fit(self, fitted):
