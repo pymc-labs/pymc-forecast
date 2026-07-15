@@ -49,6 +49,7 @@ docs = [
 notebooks = [
     "matplotlib",
     "pandas",
+    "polars",
     "ipykernel",
     "nbconvert",
 ]

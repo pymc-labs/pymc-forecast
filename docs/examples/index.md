@@ -17,6 +17,10 @@ Executed end-to-end and re-run in CI with reduced sampling settings.
 - [Local level two ways](scan_vs_statespace_local_level.ipynb) — scan-based Markov
   latents vs. the `pymc-extras` statespace backend on the same model: posterior
   quality, runtime, and a shared backtest.
+- [Retail demand under stockouts](retail_stockouts.ipynb) — censored demand on the
+  FreshRetailNet-50K panel: a hierarchical damped-trend model with a floored
+  saturating availability factor, batched predictive sampling, and a counterfactual
+  demand forecast at full availability.
 
 ```{toctree}
 :hidden:
@@ -27,4 +31,5 @@ hierarchical_forecasting
 victoria_electricity
 exponential_smoothing_state_space
 scan_vs_statespace_local_level
+retail_stockouts
 ```

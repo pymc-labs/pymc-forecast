@@ -145,6 +145,72 @@ class TestDrawLevelSamples:
             prediction_samples(idata)  # a fit result, not a prediction result
 
 
+class TestBatchedPrediction:
+    """batch_size processes the posterior in draw blocks (numpyro_forecast#65 port)."""
+
+    def test_batched_forecast_shape_and_contiguous_draws(self, fitted):
+        data, cov, idata = fitted
+        result = forecast(
+            linear_model, idata, data, cov, num_samples=50, batch_size=16, random_seed=SEED
+        )
+        fc = result["predictions"]["forecast"]
+        assert fc.dims == ("chain", "draw", "time_future")
+        assert fc.sizes["draw"] == 50
+        np.testing.assert_array_equal(fc["draw"].values, np.arange(50))
+        # genuinely distinct draws in every block, not repeated noise
+        assert float(fc.std(("chain", "draw")).min()) > 0
+
+    def test_batched_forecast_is_deterministic(self, fitted):
+        data, cov, idata = fitted
+        first = forecast(
+            linear_model, idata, data, cov, num_samples=30, batch_size=7, random_seed=SEED
+        )
+        again = forecast(
+            linear_model, idata, data, cov, num_samples=30, batch_size=7, random_seed=SEED
+        )
+        xr.testing.assert_identical(
+            first["predictions"]["forecast"], again["predictions"]["forecast"]
+        )
+
+    def test_batched_forecast_replays_posterior(self, fitted):
+        # the chunks must still condition on the fitted posterior: the batched
+        # forecast tracks the known trend exactly like the unbatched one
+        data, cov, idata = fitted
+        result = forecast(
+            linear_model, idata, data, cov, num_samples=200, batch_size=64, random_seed=SEED
+        )
+        mean = result["predictions"]["forecast"].mean(("chain", "draw")).values
+        truth = 1.0 + 2.0 * cov.values[30:, 0]
+        np.testing.assert_allclose(mean, truth, atol=0.2)
+
+    def test_batch_size_larger_than_draws_single_pass(self, fitted):
+        # oversized batch_size behaves exactly like the unbatched call
+        data, cov, idata = fitted
+        batched = forecast(
+            linear_model, idata, data, cov, num_samples=20, batch_size=500, random_seed=SEED
+        )
+        plain = forecast(linear_model, idata, data, cov, num_samples=20, random_seed=SEED)
+        xr.testing.assert_identical(
+            batched["predictions"]["forecast"], plain["predictions"]["forecast"]
+        )
+
+    def test_batched_in_sample(self, fitted):
+        data, cov, idata = fitted
+        result = predict_in_sample(
+            linear_model, idata, data, cov, num_samples=30, batch_size=8, random_seed=SEED
+        )
+        obs = result["posterior_predictive"]["obs"]
+        assert obs.sizes["draw"] == 30
+        np.testing.assert_array_equal(obs["draw"].values, np.arange(30))
+        resid = obs.mean(("chain", "draw")).values - data.values
+        assert np.abs(resid).mean() < 0.15
+
+    def test_invalid_batch_size_raises(self, fitted):
+        data, cov, idata = fitted
+        with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+            forecast(linear_model, idata, data, cov, num_samples=10, batch_size=0)
+
+
 class TestPredictInSample:
     def test_obs_group_and_fit(self, fitted):
         data, cov, idata = fitted

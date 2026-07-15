@@ -184,6 +184,7 @@ class BaseForecaster(abc.ABC):
         future_covariates=None,
         posterior=None,
         var_names=None,
+        batch_size: int | None = None,
         random_seed=None,
         progressbar: bool = False,
     ):
@@ -233,8 +234,10 @@ class BaseForecaster(abc.ABC):
             the calls draw-coherent: draw *i* in both results comes from the
             same parameter draw. Without it, each call draws
             ``num_samples`` fresh subsamples.
-        var_names, random_seed, progressbar
-            Passed through to :func:`pymc_forecast.prediction.forecast`.
+        var_names, batch_size, random_seed, progressbar
+            Passed through to :func:`pymc_forecast.prediction.forecast`
+            (``batch_size`` bounds the working memory of predictive sampling
+            on very wide panels by processing the posterior in draw blocks).
 
         Returns
         -------
@@ -270,6 +273,7 @@ class BaseForecaster(abc.ABC):
             self._data,
             covariates,
             var_names=var_names,
+            batch_size=batch_size,
             random_seed=random_seed,
             progressbar=progressbar,
         )
@@ -279,6 +283,7 @@ class BaseForecaster(abc.ABC):
         num_samples: int | None = None,
         *,
         posterior=None,
+        batch_size: int | None = None,
         random_seed=None,
         progressbar: bool = False,
     ):
@@ -292,7 +297,7 @@ class BaseForecaster(abc.ABC):
         posterior
             A fixed posterior to condition on (see :meth:`forecast` for the
             draw-coherence semantics).
-        random_seed, progressbar
+        batch_size, random_seed, progressbar
             Passed through to :func:`pymc_forecast.prediction.predict_in_sample`.
         """
         self._require_fitted()
@@ -302,6 +307,7 @@ class BaseForecaster(abc.ABC):
             posterior,
             self._data,
             self._covariates,
+            batch_size=batch_size,
             random_seed=random_seed,
             progressbar=progressbar,
         )

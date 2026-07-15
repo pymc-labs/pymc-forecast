@@ -21,7 +21,7 @@ import numpy as np
 import pymc as pm
 import xarray as xr
 
-from pymc_forecast.data import TIME_DIM, as_dataarray, null_covariates
+from pymc_forecast.data import DRAW_DIM, TIME_DIM, as_dataarray, null_covariates
 from pymc_forecast.exceptions import HorizonError
 from pymc_forecast.model import FORECAST_VAR, MU_FORECAST_VAR, MU_VAR, OBS_VAR, build_model
 
@@ -114,6 +114,102 @@ def thin_draws(posterior, num_samples: int, random_seed=None) -> xr.Dataset:
     )
 
 
+def _chunk_seeds(random_seed, num_chunks: int) -> list:
+    """Derive one independent per-chunk seed from the caller's seed.
+
+    ``None`` stays ``None`` per chunk (non-deterministic, matching the
+    unbatched semantics); a ``numpy`` ``Generator`` draws the chunk seeds; an
+    integer seed spawns them deterministically via ``SeedSequence``.
+    """
+    if random_seed is None:
+        return [None] * num_chunks
+    if isinstance(random_seed, np.random.Generator):
+        return [int(s) for s in random_seed.integers(0, 2**63, size=num_chunks)]
+    children = np.random.SeedSequence(random_seed).spawn(num_chunks)
+    return [int(child.generate_state(1)[0]) for child in children]
+
+
+def _group_datasets(result) -> dict[str, xr.Dataset]:
+    """Group-name → ``Dataset`` mapping of a predictive result (``DataTree``
+    or legacy ``InferenceData``)."""
+    if hasattr(result, "children"):  # xarray DataTree
+        return {name: node.to_dataset() for name, node in result.children.items()}
+    return {group: result[group] for group in result.groups()}
+
+
+def _concat_draw_chunks(chunks: list):
+    """Reassemble chunked predictive results into one draw-contiguous result.
+
+    Groups carrying a ``draw`` dim are concatenated with renumbered,
+    contiguous draw coords; draw-free groups (constant data, observed data)
+    are taken from the first chunk — they are identical across chunks by
+    construction. The result has the same type and group structure as a
+    single-pass call.
+    """
+    template = chunks[0]
+    chunk_groups = [_group_datasets(chunk) for chunk in chunks]
+    groups: dict[str, xr.Dataset] = {}
+    for name, first in chunk_groups[0].items():
+        if DRAW_DIM not in first.dims:
+            groups[name] = first
+            continue
+        parts = []
+        offset = 0
+        for chunk in chunk_groups:
+            ds = chunk[name]
+            draws = np.arange(offset, offset + ds.sizes[DRAW_DIM])
+            parts.append(ds.assign_coords({DRAW_DIM: draws}))
+            offset += ds.sizes[DRAW_DIM]
+        groups[name] = xr.concat(parts, dim=DRAW_DIM)
+    if hasattr(template, "children"):
+        tree = xr.DataTree.from_dict(groups)
+        tree.attrs.update(template.attrs)
+        return tree
+    return type(template)(**groups)
+
+
+def _sample_predictive(
+    posterior_ds: xr.Dataset,
+    model: pm.Model,
+    var_names: list[str],
+    *,
+    predictions: bool,
+    batch_size: int | None,
+    random_seed,
+    progressbar: bool,
+):
+    """Run ``pm.sample_posterior_predictive``, optionally in draw batches.
+
+    With ``batch_size`` set, the posterior is split into consecutive blocks of
+    at most ``batch_size`` draws (per chain) and the predictive runs once per
+    block against the same model; block results are concatenated along
+    ``draw``. This bounds the working memory of each predictive pass — the
+    port of upstream ``numpyro_forecast``'s chunk-and-offload prediction
+    (juanitorduz/numpyro_forecast#65) — which matters on very wide panels
+    (many series) where a single pass over all draws can exhaust memory.
+    """
+    if batch_size is not None and batch_size < 1:
+        msg = f"batch_size must be a positive integer, got {batch_size}"
+        raise ValueError(msg)
+    kwargs = dict(model=model, var_names=var_names, progressbar=progressbar)
+    if predictions:
+        kwargs["predictions"] = True
+    num_draws = posterior_ds.sizes[DRAW_DIM]
+    if batch_size is None or num_draws <= batch_size:
+        return pm.sample_posterior_predictive(posterior_ds, random_seed=random_seed, **kwargs)
+    starts = range(0, num_draws, batch_size)
+    seeds = _chunk_seeds(random_seed, len(starts))
+    chunks = [
+        pm.sample_posterior_predictive(
+            posterior_ds.isel({DRAW_DIM: slice(start, start + batch_size)}),
+            random_seed=seed,
+            **kwargs,
+        )
+        for start, seed in zip(starts, seeds, strict=True)
+    ]
+    return _concat_draw_chunks(chunks)
+
+
 def _default_var_names(model: pm.Model) -> list[str]:
     """The forecast variable, every ``*_future`` latent, and the noise-free
     ``mu_future`` predictor (a Deterministic, so collected explicitly), for
@@ -135,6 +231,7 @@ def forecast(
     *,
     num_samples: int | None = None,
     var_names: Sequence[str] | None = None,
+    batch_size: int | None = None,
     random_seed=None,
     progressbar: bool = False,
 ):
@@ -162,7 +259,17 @@ def forecast(
         Variables to record. Default: ``"forecast"``, all ``*_future``
         latents, and — for models registered through
         :func:`~pymc_forecast.model.predict` — the noise-free ``"mu_future"``
-        predictor.
+        predictor. On very wide panels, restricting this to
+        ``["forecast"]`` also shrinks the result's memory footprint.
+    batch_size
+        Maximum posterior draws (per chain) per predictive pass. When set,
+        the posterior is processed in consecutive blocks of at most this many
+        draws and the blocks are concatenated along ``draw`` — bounding the
+        working memory of each pass on very wide panels (the port of
+        upstream's chunked prediction, juanitorduz/numpyro_forecast#65).
+        Per-block seeds are derived from ``random_seed``, so a batched run is
+        deterministic given the seed but draws different (equally valid)
+        noise than an unbatched run.
     random_seed
         Seed for thinning and predictive sampling.
     progressbar
@@ -182,11 +289,12 @@ def forecast(
         raise HorizonError(msg)
     if num_samples is not None:
         posterior = thin_draws(posterior, num_samples, random_seed)
-    return pm.sample_posterior_predictive(
+    return _sample_predictive(
         posterior_dataset(posterior),
-        model=model,
-        var_names=list(var_names) if var_names is not None else _default_var_names(model),
+        model,
+        list(var_names) if var_names is not None else _default_var_names(model),
         predictions=True,
+        batch_size=batch_size,
         random_seed=random_seed,
         progressbar=progressbar,
     )
@@ -199,6 +307,7 @@ def predict_in_sample(
     covariates=None,
     *,
     num_samples: int | None = None,
+    batch_size: int | None = None,
     random_seed=None,
     progressbar: bool = False,
 ):
@@ -217,7 +326,7 @@ def predict_in_sample(
     covariates
         Covariates covering (at least) the observed window; surplus future
         steps are dropped. ``None`` for models without covariates.
-    num_samples, random_seed, progressbar
+    num_samples, batch_size, random_seed, progressbar
         As in :func:`forecast`.
 
     Returns
@@ -237,10 +346,12 @@ def predict_in_sample(
     var_names = [OBS_VAR]
     if MU_VAR in model.named_vars:
         var_names.append(MU_VAR)
-    return pm.sample_posterior_predictive(
+    return _sample_predictive(
         posterior_dataset(posterior),
-        model=model,
-        var_names=var_names,
+        model,
+        var_names,
+        predictions=False,
+        batch_size=batch_size,
         random_seed=random_seed,
         progressbar=progressbar,
     )
