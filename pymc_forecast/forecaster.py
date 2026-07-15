@@ -149,15 +149,79 @@ class BaseForecaster(abc.ABC):
     def _fit(self, random_seed) -> None:
         """Fit the training model (called once per :meth:`fit`)."""
 
-    def draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
+    _batch_generated_posterior = False
+    """Whether posterior draws are generated on demand and benefit from batching."""
+
+    def draw_posterior(
+        self,
+        num_samples: int,
+        random_seed=None,
+        *,
+        batch_size: int | None = None,
+    ) -> xr.Dataset:
         """Return ``num_samples`` posterior draws as a posterior ``Dataset``.
 
         Feed the result to the ``posterior=`` argument of :meth:`forecast`
         and :meth:`predict_in_sample` to condition several predictive calls
         on the same draws (see those methods).
+
+        Parameters
+        ----------
+        num_samples
+            Number of posterior draws.
+        random_seed
+            Seed for posterior sampling.
+        batch_size
+            For backends that generate posterior draws on demand (currently
+            :class:`Forecaster`), draw at most this many at once and
+            concatenate the host-backed xarray chunks. On wide panels this
+            bounds the peak allocation made by ``pm.Approximation.sample`` —
+            the posterior side of upstream's chunked sampling
+            (juanitorduz/numpyro_forecast#65); the predictive side is the
+            ``batch_size`` argument of :meth:`forecast` /
+            :meth:`predict_in_sample`. ``None`` keeps the single-shot path.
+            Backends whose posterior is already materialized (HMC and
+            Pathfinder) thin it once and do not need this memory knob.
         """
         self._require_fitted()
-        return self._draw_posterior(num_samples, random_seed)
+        if batch_size is not None and batch_size <= 0:
+            msg = f"batch_size must be positive, got {batch_size}"
+            raise ValueError(msg)
+        if batch_size is None or not self._batch_generated_posterior:
+            return self._draw_posterior(num_samples, random_seed)
+        if batch_size >= num_samples:
+            return self._draw_posterior(num_samples, random_seed)
+
+        # Passing one Generator through all calls gives every chunk a fresh,
+        # deterministic child seed without mutating global NumPy state. PyMC's
+        # legacy RandomState is kept as-is because ``default_rng`` cannot wrap it.
+        rng = (
+            random_seed
+            if isinstance(random_seed, np.random.RandomState)
+            else np.random.default_rng(random_seed)
+        )
+        chunks: list[xr.Dataset] = []
+        offset = 0
+        while offset < num_samples:
+            size = min(batch_size, num_samples - offset)
+            chunk = self._draw_posterior(size, rng)
+            if chunk.sizes.get("chain") != 1:
+                msg = (
+                    "generated posterior batches must have one chain; got "
+                    f"sizes {dict(chunk.sizes)}"
+                )
+                raise ValueError(msg)
+            chunk = chunk.assign_coords(draw=np.arange(offset, offset + size))
+            chunks.append(chunk)
+            offset += size
+        return xr.concat(
+            chunks,
+            dim="draw",
+            data_vars="all",
+            coords="minimal",
+            compat="override",
+            combine_attrs="override",
+        )
 
     @abc.abstractmethod
     def _draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
@@ -402,7 +466,14 @@ class Forecaster(BaseForecaster):
         any ``pm.fit``-compatible inference object.
     optimizer
         ``None`` (Adam with lr ``0.01``), a positive learning rate, or a PyMC
-        optimizer such as ``pm.adam(learning_rate=...)``.
+        optimizer such as ``pm.adam(learning_rate=...)``. The JAX backend
+        accepts ``None`` or a positive learning rate.
+    backend
+        ``None`` or ``"pytensor"`` uses ``pm.fit``. ``"jax"`` runs mean-field
+        ADVI and Adam as one JAX ``lax.scan`` on the selected accelerator
+        (GPU when a CUDA JAX is installed), while retaining PyMC's ordinary
+        approximation object for posterior sampling. The optional ``jax``
+        extra is required.
     num_steps
         Number of optimization steps.
     progressbar
@@ -420,6 +491,8 @@ class Forecaster(BaseForecaster):
         The ELBO loss history (one value per step).
     """
 
+    _batch_generated_posterior = True
+
     def __init__(
         self,
         model_fn,
@@ -428,19 +501,52 @@ class Forecaster(BaseForecaster):
         *,
         method="advi",
         optimizer=None,
+        backend: str | None = None,
         num_steps: int = 10_000,
         random_seed=None,
         progressbar: bool | None = None,
         fit_kwargs: Mapping | None = None,
     ) -> None:
         self._method = method
-        self._optimizer = _resolve_optimizer(optimizer)
+        if backend not in (None, "pytensor", "jax"):
+            msg = f"unknown VI backend {backend!r}; use None, 'pytensor', or 'jax'"
+            raise MethodResolutionError(msg)
+        self._backend = backend
+        if backend == "jax":
+            if method != "advi":
+                msg = "the JAX backend currently supports method='advi' only"
+                raise MethodResolutionError(msg)
+            if optimizer is None:
+                self._learning_rate = DEFAULT_LEARNING_RATE
+            elif isinstance(optimizer, int | float) and optimizer > 0:
+                self._learning_rate = float(optimizer)
+            else:
+                msg = "the JAX backend requires optimizer=None or a positive learning rate"
+                raise MethodResolutionError(msg)
+            self._optimizer = None
+        else:
+            self._optimizer = _resolve_optimizer(optimizer)
         self._num_steps = num_steps
         self._fit_kwargs = dict(fit_kwargs or {})
+        if backend == "jax" and self._fit_kwargs:
+            msg = "fit_kwargs are not supported by the JAX backend"
+            raise MethodResolutionError(msg)
         self._progressbar = _resolve_progressbar(progressbar, self._fit_kwargs, "fit_kwargs")
         super().__init__(model_fn, data, covariates, random_seed=random_seed)
 
     def _fit(self, random_seed) -> None:
+        if self._backend == "jax":
+            from pymc_forecast.jax_backend import fit_advi_jax
+
+            self.approx = fit_advi_jax(
+                self.model,
+                num_steps=self._num_steps,
+                learning_rate=self._learning_rate,
+                random_seed=random_seed,
+            )
+            self.losses = self.approx.hist
+            _check_vi_convergence(self.losses, self._num_steps)
+            return
         try:
             self.approx = pm.fit(
                 n=self._num_steps,

@@ -8,11 +8,15 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- GPU variational inference: `Forecaster(..., backend="jax")` optimizes PyMC's
+  mean-field ADVI objective with a JAX-native `lax.scan` (on GPU when a CUDA
+  JAX is installed) and returns the usual PyMC approximation; requires the new
+  `jax` extra ([#47](https://github.com/pymc-labs/pymc-forecast/issues/47)).
 - Batched predictive sampling: `forecast(...)` and `predict_in_sample(...)`
   (module functions and forecaster methods) accept `batch_size=` to process
-  the posterior in consecutive draw blocks, bounding the working memory of
-  predictive sampling on very wide panels — the port of upstream's
-  chunk-and-offload prediction
+  the posterior in consecutive draw blocks, and `draw_posterior(...,
+  batch_size=N)` bounds the peak allocation of posterior sampling on
+  VI backends — together the port of upstream's chunk-and-offload prediction
   ([numpyro_forecast#65](https://github.com/juanitorduz/numpyro_forecast/pull/65),
   [#47](https://github.com/pymc-labs/pymc-forecast/issues/47)).
 - New example notebook — *Forecasting retail demand under stockouts*: the

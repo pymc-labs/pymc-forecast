@@ -19,6 +19,7 @@ rather than a 1:1 translation.
 ```bash
 pip install pymc-forecast            # core: PyMC + ArviZ
 pip install 'pymc-forecast[extras]'  # + pymc-extras (Pathfinder, statespace)
+pip install 'pymc-forecast[jax]'     # + JAX-native ADVI backend
 ```
 
 ## At a glance
