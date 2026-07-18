@@ -285,6 +285,11 @@ class TestHMCForecaster:
         )
         pred = fc.forecast(cov, num_samples=50, random_seed=SEED)["predictions"]
         assert pred["forecast"].sizes["time_future"] == 5
+        assert pred["expected_observation_future"].dims == (
+            "chain",
+            "draw",
+            "time_future",
+        )
 
 
 class TestConsistency:

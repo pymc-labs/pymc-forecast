@@ -52,6 +52,8 @@ from pymc_forecast.metrics import (
     make_mase,
 )
 from pymc_forecast.model import (
+    EXPECTED_OBSERVATION_FORECAST_VAR,
+    EXPECTED_OBSERVATION_VAR,
     FORECAST_VAR,
     MU_FORECAST_VAR,
     MU_VAR,
@@ -77,6 +79,8 @@ __all__ = [
     "CHAIN_DIM",
     "DEFAULT_METRICS",
     "DRAW_DIM",
+    "EXPECTED_OBSERVATION_FORECAST_VAR",
+    "EXPECTED_OBSERVATION_VAR",
     "FORECAST_VAR",
     "FUTURE_DIM",
     "MU_FORECAST_VAR",

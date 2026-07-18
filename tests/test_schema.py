@@ -23,6 +23,8 @@ def test_public_name_constants():
     assert pymc_forecast.FUTURE_DIM == "time_future"
     assert pymc_forecast.OBS_VAR == "obs"
     assert pymc_forecast.FORECAST_VAR == "forecast"
+    assert pymc_forecast.EXPECTED_OBSERVATION_VAR == "expected_observation"
+    assert pymc_forecast.EXPECTED_OBSERVATION_FORECAST_VAR == "expected_observation_future"
     assert pymc_forecast.MU_VAR == "mu"
     assert pymc_forecast.MU_FORECAST_VAR == "mu_future"
     assert pymc_forecast.CHAIN_DIM == "chain"
@@ -99,6 +101,14 @@ class TestForecastSchema:
         pred = fc.forecast(cov, num_samples=10, random_seed=SEED)["predictions"]
         assert pred["mu_future"].dims == ("chain", "draw", "time_future", "series")
 
+    def test_expected_observation_future_schema(self, univariate):
+        fc, index = univariate
+        pred = fc.forecast(null_covariates(index), num_samples=10, random_seed=SEED)["predictions"]
+        expected = pred["expected_observation_future"]
+        assert expected.dims == ("chain", "draw", "time_future")
+        np.testing.assert_array_equal(expected["time_future"].values, index[T_OBS:].values)
+        xr.testing.assert_equal(expected, pred["mu_future"].rename(expected.name))
+
 
 class TestInSampleSchema:
     def test_posterior_predictive_group_and_dims(self, univariate):
@@ -126,6 +136,14 @@ class TestInSampleSchema:
         fc, _ = hierarchical
         result = fc.predict_in_sample(num_samples=10, random_seed=SEED)
         assert result["posterior_predictive"]["mu"].dims == ("chain", "draw", "time", "series")
+
+    def test_expected_observation_schema(self, univariate):
+        fc, index = univariate
+        pred = fc.predict_in_sample(num_samples=10, random_seed=SEED)["posterior_predictive"]
+        expected = pred["expected_observation"]
+        assert expected.dims == ("chain", "draw", "time")
+        np.testing.assert_array_equal(expected["time"].values, index[:T_OBS].values)
+        xr.testing.assert_equal(expected, pred["mu"].rename(expected.name))
 
 
 class TestPredictionSamplesRemap:

@@ -3,7 +3,7 @@ import pymc as pm
 import pytensor.tensor as pt
 import pytest
 import xarray as xr
-from example_models import linear_model, make_trend_data
+from example_models import linear_model, make_trend_data, poisson_model
 
 from pymc_forecast.data import TIME_DIM
 from pymc_forecast.exceptions import HorizonError
@@ -94,6 +94,56 @@ class TestForecast:
         result = forecast(custom_forecast_model, posterior, data, cov, random_seed=SEED)
         assert set(result["predictions"].data_vars) == {"forecast"}
         assert result["predictions"]["forecast"].dims == ("chain", "draw", "time_future")
+
+
+class TestExpectedObservation:
+    def test_poisson_log_link_keeps_eta_and_emits_expected_counts(self):
+        covariates = xr.DataArray(
+            np.linspace(-0.5, 0.5, 5)[:, None],
+            dims=("time", "covariate"),
+            coords={"time": np.arange(5), "covariate": ["x"]},
+        )
+        data = xr.DataArray([1, 2, 1], dims="time", coords={"time": np.arange(3)})
+        posterior = xr.Dataset(
+            {
+                "intercept": (("chain", "draw"), [[0.0, 0.1, 0.2], [0.3, 0.4, 0.5]]),
+                "beta": (
+                    ("chain", "draw", "covariate"),
+                    [[[0.2], [0.3], [0.4]], [[0.5], [0.6], [0.7]]],
+                ),
+            },
+            coords={"chain": [2, 4], "draw": [10, 20, 30], "covariate": ["x"]},
+        )
+
+        pre = prediction_samples(
+            predict_in_sample(poisson_model, posterior, data, covariates, random_seed=SEED)
+        )
+        post = prediction_samples(
+            forecast(poisson_model, posterior, data, covariates, random_seed=SEED)
+        )
+        eta = (
+            posterior["intercept"].values[..., None]
+            + posterior["beta"].values[..., 0, None] * covariates.values[:, 0]
+        )
+
+        assert pre["mu"].dims == ("chain", "draw", "time")
+        assert pre["expected_observation"].dims == ("chain", "draw", "time")
+        assert post["mu_future"].dims == ("chain", "draw", "time_future")
+        assert post["expected_observation_future"].dims == (
+            "chain",
+            "draw",
+            "time_future",
+        )
+        np.testing.assert_allclose(pre["mu"], eta[..., :3])
+        np.testing.assert_allclose(pre["expected_observation"], np.exp(eta[..., :3]))
+        np.testing.assert_allclose(post["mu_future"], eta[..., 3:])
+        np.testing.assert_allclose(post["expected_observation_future"], np.exp(eta[..., 3:]))
+        np.testing.assert_array_equal(pre["chain"], posterior["chain"])
+        np.testing.assert_array_equal(pre["draw"], posterior["draw"])
+        np.testing.assert_array_equal(post["chain"], posterior["chain"])
+        np.testing.assert_array_equal(post["draw"], posterior["draw"])
+        np.testing.assert_array_equal(pre["time"], data["time"])
+        np.testing.assert_array_equal(post["time_future"], covariates["time"][3:])
 
 
 class TestDrawLevelSamples:

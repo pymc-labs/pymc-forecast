@@ -351,7 +351,11 @@ class BaseForecaster(abc.ABC):
         random_seed=None,
         progressbar: bool = False,
     ):
-        """Sample the in-sample posterior predictive of ``"obs"`` (and ``"mu"``).
+        """Sample the in-sample posterior predictive and registered predictors.
+
+        The result contains ``"obs"`` and ``"mu"`` plus
+        ``"expected_observation"`` when the model supplies it to
+        :func:`~pymc_forecast.model.predict`.
 
         Parameters
         ----------

@@ -73,8 +73,16 @@ class TestBuildModel:
         data, cov = make_trend_data()
         model = build_model(linear_model, data, cov)
         assert {"mu", "mu_future"} <= set(model.named_vars)
+        assert "expected_observation" not in model.named_vars
         train = build_model(linear_model, data, cov.isel({TIME_DIM: slice(None, 30)}))
         assert "mu" in train.named_vars and "mu_future" not in train.named_vars
+
+    def test_registers_optional_expected_observation(self):
+        data, cov = make_random_walk_data()
+        model = build_model(random_walk_model, data, cov)
+        assert {"expected_observation", "expected_observation_future"} <= set(model.named_vars)
+        assert model.named_vars["expected_observation"].eval().shape == (40,)
+        assert model.named_vars["expected_observation_future"].eval().shape == (5,)
 
     def test_mu_full_shape_for_batch_dims(self):
         rng = np.random.default_rng(0)
@@ -129,6 +137,7 @@ class TestForecastingModelFacade:
         oop = build_model(RandomWalkForecastingModel(), data, cov)
         fn = build_model(random_walk_model, data, cov)
         assert {rv.name for rv in oop.free_RVs} == {rv.name for rv in fn.free_RVs}
+        assert {"expected_observation", "expected_observation_future"} <= set(oop.named_vars)
 
     def test_horizon_unavailable_outside_build(self):
         instance = RandomWalkForecastingModel()
