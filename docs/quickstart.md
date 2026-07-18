@@ -38,6 +38,26 @@ results = backtest(y, None, model, min_train_window=48, test_window=4, stride=4,
                    num_samples=200, forecaster_options={"num_steps": 3_000}, random_seed=0)
 ```
 
+For a non-identity link, keep the link-scale latent and provide the
+outcome-scale expectation explicitly:
+
+```python
+eta = intercept + pt.dot(covariates, beta)
+predict(
+    h,
+    lambda name, eta, dims, obs: pm.Poisson(
+        name, pt.exp(eta), dims=dims, observed=obs
+    ),
+    eta,
+    expected_observation=pt.exp(eta),
+)
+```
+
+Predictions then include `mu` / `mu_future` (the supplied `eta`) and
+`expected_observation` / `expected_observation_future` (expected counts);
+all retain the same chain, draw, and time coordinates. See the
+[prediction output schema](schema.md) for the full contract.
+
 ## Check VI convergence
 
 {class}`~pymc_forecast.Forecaster` uses mean-field ADVI, which can
