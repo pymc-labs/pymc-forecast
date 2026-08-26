@@ -1,0 +1,25 @@
+pyproject.toml
+  s_b7825f8255c54a::t_881cb9cfb46e34 59-65
+README.md
+  s_b7825f8255c54a::t_15a589dfc70427 34,42,45-46,48,54,57-67
+docs/index.md
+  s_b7825f8255c54a::t_ddce87b318e5c7 31,41-42,44
+docs/quickstart.md
+  s_b7825f8255c54a::t_cfb66ca5bb07cc 18,26,29-30,32,36,39-49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "3103641eb1dc1433396de2c4f098bf2ea51d53ca",
+  "prompts": {},
+  "sessions": {
+    "s_b7825f8255c54a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fe6eb9b9-46d6-4516-a45d-ce69a96a56af",
+        "model": "claude-opus-5"
+      },
+      "human_author": "daimon-pymclabs <daimon@pymc-labs.com>"
+    }
+  }
+}
