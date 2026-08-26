@@ -1,0 +1,33 @@
+docs/schema.md
+  s_42f1fa4574c0a0::t_e2aa5ec993bf4d 56-59
+  s_42f1fa4574c0a0::t_c5191d0bba8bdd 38-44
+pymc_forecast/prediction.py
+  s_42f1fa4574c0a0::t_af35c51cd3cfd7 235-237
+CHANGELOG.md
+  s_42f1fa4574c0a0::t_03e8f836aafa0e 11-21
+pymc_forecast/model.py
+  s_42f1fa4574c0a0::t_95e1a06ce7ecc8 18
+  s_42f1fa4574c0a0::t_d3a64ea069190b 259
+  s_42f1fa4574c0a0::t_cf308867c7f6d1 270-275,280
+  s_42f1fa4574c0a0::t_55780ccca13ead 195-202
+tests/test_model.py
+  s_42f1fa4574c0a0::t_ed38146e8a5a17 122-145
+docs/quickstart.md
+  s_42f1fa4574c0a0::t_8ea7ccb431d873 48-51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "1547da5f9c79c42b7c196a7bb9c0bd8c1dce9b9b",
+  "prompts": {},
+  "sessions": {
+    "s_42f1fa4574c0a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9c010b84-f074-4d87-add9-513ed8284a86",
+        "model": "claude-opus-5"
+      },
+      "human_author": "daimon-pymclabs <daimon@pymc-labs.com>"
+    }
+  }
+}
