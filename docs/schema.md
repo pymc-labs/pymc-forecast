@@ -35,10 +35,13 @@ The group names follow the ArviZ convention (out-of-sample predictions live in
 `mu` / `mu_future` carry the full draw-level samples of the latent passed to
 {func}`pymc_forecast.predict` — before observation noise, so they separate
 parameter and latent uncertainty from observation-level noise (e.g. for
-causal-impact expectations or plotting the expected trajectory against the
-predictive draws). For GLM-style models this is the linear predictor, not the
-distribution mean. The names are reserved: a model body must not define its
-own `mu` or `mu_future` variable. Models that register observations without
+plotting the expected trajectory against the predictive draws). For GLM-style
+models this is the linear predictor, not the distribution mean — under a
+non-identity link `mu` is on the link scale, so consumers that need outcome
+units (causal-impact expectations, for instance) should read
+`expected_observation` / `expected_observation_future` instead, and use `mu`
+only for identity-link models. The names are reserved: a model body must not
+define its own `mu` or `mu_future` variable. Models that register observations without
 `predict` ({func}`pymc_forecast.predict_mvn`, the statespace adapter) do not
 expose them.
 
@@ -50,8 +53,10 @@ exclude observation-level sampling noise. For example, a Poisson log-link
 model passes `latent=eta` and `expected_observation=exp(eta)`, retaining `eta`
 as `mu` / `mu_future` while exposing expected counts separately. The library
 does not infer inverse links or distribution means from the observation
-factory. When supplied, these names are reserved just like `mu` /
-`mu_future`; models that omit the argument retain the previous output schema.
+factory. These names are reserved just like `mu` / `mu_future` — a model body
+must not define its own `expected_observation` or `expected_observation_future`
+variable, whether or not it passes `expected_observation=`. Models that omit
+the argument retain the previous output schema.
 
 The statespace adapter additionally exposes the latent state trajectories as
 `forecast_latent` in its `predictions` group.

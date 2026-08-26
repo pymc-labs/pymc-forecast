@@ -232,10 +232,9 @@ def _default_var_names(model: pm.Model) -> list[str]:
     names += [
         rv.name for rv in model.free_RVs if rv.name.endswith("_future") and rv.name != FORECAST_VAR
     ]
-    if MU_FORECAST_VAR in model.named_vars:
-        names.append(MU_FORECAST_VAR)
-    if EXPECTED_OBSERVATION_FORECAST_VAR in model.named_vars:
-        names.append(EXPECTED_OBSERVATION_FORECAST_VAR)
+    for name in (MU_FORECAST_VAR, EXPECTED_OBSERVATION_FORECAST_VAR):
+        if name in model.named_vars and name not in names:
+            names.append(name)
     return names
 
 

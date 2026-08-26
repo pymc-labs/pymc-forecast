@@ -45,8 +45,10 @@ outcome-scale expectation explicitly:
 eta = intercept + pt.dot(covariates, beta)
 predict(
     h,
-    lambda name, eta, dims, obs: pm.Poisson(
-        name, pt.exp(eta), dims=dims, observed=obs
+    # the factory receives the *windowed* latent, so it applies the inverse
+    # link itself — it cannot reuse the full-horizon `pt.exp(eta)` below
+    lambda name, eta_window, dims, obs: pm.Poisson(
+        name, pt.exp(eta_window), dims=dims, observed=obs
     ),
     eta,
     expected_observation=pt.exp(eta),

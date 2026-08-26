@@ -119,7 +119,30 @@ class TestBuildModel:
             linear_model(h, covariates)
 
         data, cov = make_trend_data()
-        with pytest.raises(HorizonError, match="reserves 'mu'"):
+        with pytest.raises(HorizonError, match=r"already defines \['mu'\]"):
+            build_model(colliding, data, cov)
+
+    @pytest.mark.parametrize("name", ["expected_observation", "expected_observation_future"])
+    def test_reserved_expected_observation_name_collides_without_the_argument(self, name):
+        # the names are reserved unconditionally: a model that never passes
+        # expected_observation= must still not be able to define them, or the
+        # user variable would be swept into the documented schema slot by
+        # _default_var_names / predict_in_sample, which collect by name
+        def colliding(h, covariates):
+            pm.Normal(name, 0.0, 1.0)
+            linear_model(h, covariates)
+
+        data, cov = make_trend_data()
+        with pytest.raises(HorizonError, match=rf"already defines \['{name}'\]"):
+            build_model(colliding, data, cov)
+
+    def test_reserved_expected_observation_name_collides_with_the_argument(self):
+        def colliding(h, covariates):
+            pm.Normal("expected_observation", 0.0, 1.0)
+            random_walk_model(h, covariates)
+
+        data, cov = make_random_walk_data()
+        with pytest.raises(HorizonError, match=r"already defines \['expected_observation'\]"):
             build_model(colliding, data, cov)
 
     def test_prior_only_build(self):

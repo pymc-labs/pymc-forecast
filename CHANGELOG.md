@@ -8,6 +8,17 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- Schema addition — conditional expected observation: models can pass
+  `expected_observation=` to `predict(...)` to emit `expected_observation` /
+  `expected_observation_future` (exported as
+  `pymc_forecast.EXPECTED_OBSERVATION_VAR` /
+  `EXPECTED_OBSERVATION_FORECAST_VAR`) alongside the existing `mu` /
+  `mu_future`. These carry `E[Y | parameters, latent state, covariates]` in
+  observed outcome units, so GLM-style models can expose outcome-scale
+  expectations while `mu` stays the link-scale latent predictor. Both new
+  names are reserved unconditionally: a model body that defines its own
+  variable under either name now raises `HorizonError`, whether or not it uses
+  the new argument ([#52](https://github.com/pymc-labs/pymc-forecast/issues/52)).
 - GPU variational inference: `Forecaster(..., backend="jax")` optimizes PyMC's
   mean-field ADVI objective with a JAX-native `lax.scan` (on GPU when a CUDA
   JAX is installed) and returns the usual PyMC approximation; requires the new

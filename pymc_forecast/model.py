@@ -15,7 +15,7 @@ derived from the *coords*: ``future = len(covariates.time) - len(data.time)``.
 """
 
 import abc
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -192,6 +192,14 @@ def _register_predictor(model: pm.Model, name: str, predictor_slice, dims: tuple
     pm.Deterministic(name, pt.broadcast_to(predictor_slice, shape), dims=dims)
 
 
+def _join_names(names: Sequence[str]) -> str:
+    """Render names as a comma-separated list with a final "and"."""
+    quoted = [repr(name) for name in names]
+    if len(quoted) < 3:
+        return " and ".join(quoted)
+    return f"{', '.join(quoted[:-1])} and {quoted[-1]}"
+
+
 def predict(
     h: Horizon,
     obs_fn: ObsFactory,
@@ -248,7 +256,7 @@ def predict(
         Optional full-horizon conditional expected observation in observed
         outcome units, with time on axis 0. For a Poisson log-link model whose
         ``latent`` is ``eta``, pass ``pt.exp(eta)``. Its generated variable
-        names are reserved only when this argument is provided.
+        names are reserved whether or not this argument is provided.
     dims
         Extra (non-time) dims of the observation. Default: inferred from the
         data's non-time dims (``()`` for prior-only builds).
@@ -259,14 +267,17 @@ def predict(
         dims = () if h.data is None else tuple(d for d in h.data.dims if d != TIME_DIM)
     observed = None if h.data is None else h.data.transpose(TIME_DIM, ...).values
     model = pm.modelcontext(None)
-    reserved = {MU_VAR, MU_FORECAST_VAR}
-    if expected_observation is not None:
-        reserved.update({EXPECTED_OBSERVATION_VAR, EXPECTED_OBSERVATION_FORECAST_VAR})
+    reserved = {
+        MU_VAR,
+        MU_FORECAST_VAR,
+        EXPECTED_OBSERVATION_VAR,
+        EXPECTED_OBSERVATION_FORECAST_VAR,
+    }
     taken = reserved.intersection(model.named_vars)
     if taken:
         msg = (
             f"the model already defines {sorted(taken)}; predict() reserves "
-            f"{' and '.join(repr(name) for name in sorted(reserved))} for "
+            f"{_join_names(sorted(reserved))} for "
             "generated predictive outputs — rename the model variable"
         )
         raise HorizonError(msg)
