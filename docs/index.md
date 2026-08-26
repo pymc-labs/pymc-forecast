@@ -28,6 +28,7 @@ pip install 'pymc-forecast[jax]'     # + JAX-native ADVI backend
 import pymc as pm, pytensor.tensor as pt
 from pymc_forecast import Forecaster, predict, time_series
 
+
 def local_level(h, covariates):
     drift = time_series(h, "drift", lambda name, dims: pm.Normal(name, 0.0, 0.5, dims=dims))
     sigma = pm.HalfNormal("sigma", 1.0)
@@ -37,9 +38,10 @@ def local_level(h, covariates):
         pt.cumsum(drift),
     )
 
-fc = Forecaster(local_level, train, num_steps=5_000)      # ADVI
+
+fc = Forecaster(local_level, train, num_steps=5_000)  # ADVI
 idata = fc.forecast(horizon=8, num_samples=500)
-forecast = idata["predictions"]["forecast"]               # dims: (chain, draw, time_future)
+forecast = idata["predictions"]["forecast"]  # dims: (chain, draw, time_future)
 ```
 
 **[Start with the full workflow →](quickstart.md)** ·

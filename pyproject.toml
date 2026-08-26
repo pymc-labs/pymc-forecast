@@ -56,6 +56,13 @@ notebooks = [
     "nbconvert",
 ]
 
+[tool.uv]
+# numba ships prereleases with no numpy upper bound (e.g. 0.63.0b1), so uv would
+# pick one over a stable numba whenever numpy moves ahead of the stable cap. Those
+# betas still call numpy APIs removed in numpy 2.3 (np.row_stack), which breaks
+# every pytensor numba-backed import. Stay on released versions.
+prerelease = "disallow"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

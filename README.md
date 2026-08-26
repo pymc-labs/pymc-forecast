@@ -31,6 +31,7 @@ dates = pd.date_range("2024-01-07", periods=60, freq="W")
 y = pd.Series(np.cumsum(np.random.default_rng(0).normal(0.2, 1.0, 60)) + 10, index=dates)
 train, test = y.iloc[:52], y.iloc[52:]
 
+
 def model(h, covariates):
     # a per-step drift latent; time_series adds the matching `_future` latent
     drift = time_series(h, "drift", lambda name, dims: pm.Normal(name, 0.0, 0.5, dims=dims))
@@ -38,22 +39,32 @@ def model(h, covariates):
     predict(
         h,
         lambda name, mu, dims, obs: pm.Normal(name, mu, sigma, dims=dims, observed=obs),
-        pt.cumsum(drift),                       # local-linear trend
+        pt.cumsum(drift),  # local-linear trend
     )
 
-fc = Forecaster(model, train, num_steps=5_000, random_seed=0)   # ADVI
+
+fc = Forecaster(model, train, num_steps=5_000, random_seed=0)  # ADVI
 idata = fc.forecast(horizon=8, num_samples=500, random_seed=0)
-forecast = idata["predictions"]["forecast"]     # dims: (chain, draw, time_future)
+forecast = idata["predictions"]["forecast"]  # dims: (chain, draw, time_future)
 # Outputs stay draw-level (never reduced to means/quantiles); prediction_samples(idata)
 # extracts the samples Dataset from a forecast or in-sample result alike.
 
 # score against the held-out weeks (aligned by dim name, not axis position)
 truth = test.to_xarray().rename({"index": "time_future"})
-print(evaluate_forecast(forecast, truth))       # {'mae': ..., 'rmse': ..., 'crps': ..., 'coverage': ...}
+print(evaluate_forecast(forecast, truth))  # {'mae': ..., 'rmse': ..., 'crps': ..., 'coverage': ...}
 
 # rolling-origin backtest over the whole series
-results = backtest(y, None, model, min_train_window=48, test_window=4, stride=4,
-                   num_samples=200, forecaster_options={"num_steps": 3_000}, random_seed=0)
+results = backtest(
+    y,
+    None,
+    model,
+    min_train_window=48,
+    test_window=4,
+    stride=4,
+    num_samples=200,
+    forecaster_options={"num_steps": 3_000},
+    random_seed=0,
+)
 ```
 
 Swap `Forecaster` for `HMCForecaster` (NUTS, with `nuts_sampler="nutpie"/"numpyro"/...`)
