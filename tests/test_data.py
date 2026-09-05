@@ -15,6 +15,12 @@ from pymc_forecast.exceptions import AlignmentError
 
 
 class TestAsDataarray:
+    @pytest.mark.parametrize("container", [pd.Series, pd.DataFrame])
+    def test_short_datetime_frequency_survives_normalization(self, container):
+        index = pd.date_range("2024-01-01", periods=2, freq="D")
+        data = as_dataarray(container([1.0, 2.0], index=index))
+        assert data.get_index("time").freq == index.freq
+
     def test_numpy_1d(self):
         da = as_dataarray(np.arange(5.0))
         assert da.dims == ("time",)

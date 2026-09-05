@@ -100,6 +100,13 @@ def as_dataarray(obj, *, role: Role = "data") -> xr.DataArray:
                     "pass an xarray.DataArray with named dims for higher-dimensional data"
                 )
                 raise AlignmentError(msg)
+        if isinstance(obj, pd.Series | pd.DataFrame) and isinstance(obj.index, pd.DatetimeIndex):
+            # Older xarray converts pandas' microsecond datetimes to ns and
+            # drops freq in the process. Restore the known frequency on the
+            # converted index, without forcing a datetime unit on newer xarray.
+            time_index = da.get_index(TIME_DIM)
+            if obj.index.freq is not None and time_index.freq is None:
+                da = da.assign_coords({TIME_DIM: pd.DatetimeIndex(time_index, freq=obj.index.freq)})
     if TIME_DIM not in da.coords:
         da = da.assign_coords({TIME_DIM: np.arange(da.sizes[TIME_DIM])})
     return da

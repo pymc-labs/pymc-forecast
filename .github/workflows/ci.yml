@@ -39,6 +39,7 @@ jobs:
   base-package:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - dependencies: current
