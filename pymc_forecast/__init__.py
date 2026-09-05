@@ -69,6 +69,7 @@ from pymc_forecast.prediction import (
     thin_draws,
 )
 from pymc_forecast.priors import PriorConfig
+from pymc_forecast.ssoe import SSOEResult, ssoe
 from pymc_forecast.statespace import StatespaceForecaster, StatespaceModel
 
 __version__ = "0.2.0"
@@ -98,6 +99,7 @@ __all__ = [
     "PathfinderForecaster",
     "PriorConfig",
     "PymcForecastError",
+    "SSOEResult",
     "StatespaceForecaster",
     "StatespaceModel",
     "__version__",
@@ -127,6 +129,7 @@ __all__ = [
     "predict_mvn",
     "prediction_samples",
     "results_to_dataframe",
+    "ssoe",
     "thin_draws",
     "time_series",
 ]

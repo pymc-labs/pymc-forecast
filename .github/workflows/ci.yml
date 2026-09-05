@@ -67,7 +67,8 @@ jobs:
             "${GITHUB_WORKSPACE}/tests/test_package.py" \
             "${GITHUB_WORKSPACE}/tests/test_data.py" \
             "${GITHUB_WORKSPACE}/tests/test_metrics.py" \
-            "${GITHUB_WORKSPACE}/tests/test_alignment.py"
+            "${GITHUB_WORKSPACE}/tests/test_alignment.py" \
+            "${GITHUB_WORKSPACE}/tests/test_ssoe.py"
 
   notebooks:
     runs-on: ubuntu-latest

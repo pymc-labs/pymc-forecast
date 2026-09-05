@@ -8,6 +8,12 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- Add `ssoe` and `SSOEResult` for observation-driven recursions with named inputs,
+  shared training/forecast updates, and fresh future errors under posterior replay.
+- Add executed ARMA, intermittent-demand and inference-comparison notebooks;
+  refactor Holt-Winters to use `ssoe`, expose conditional future means, and
+  center initial seasonality to distinguish it from the initial level.
+
 - Validate non-time dimensions and coordinates on every forecast covariate
   input path and shared panel dimensions during model construction. Reordered
   or renamed features now raise before posterior sampling instead of silently

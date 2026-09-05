@@ -13,7 +13,7 @@ Executed end-to-end and re-run in CI with reduced sampling settings.
   forecasting with full-horizon covariates.
 - [Exponential smoothing in state-space form](exponential_smoothing_state_space.ipynb)
   — a damped Holt-Winters single-source-of-error recursion written with
-  `pytensor.scan`, fit with NUTS.
+  the shared `ssoe` recursion helper, fit with NUTS.
 - [Local level two ways](scan_vs_statespace_local_level.ipynb) — scan-based Markov
   latents vs. the `pymc-extras` statespace backend on the same model: posterior
   quality, runtime, and a shared backtest.
@@ -21,12 +21,21 @@ Executed end-to-end and re-run in CI with reduced sampling settings.
   FreshRetailNet-50K panel: a hierarchical damped-trend model with a floored
   saturating availability factor, batched predictive sampling, and a counterfactual
   demand forecast at full availability.
+- [ARMA forecasting](arma.ipynb) — one observation/error recursion for filtering and
+  forecasting, parameter recovery and expanding-window evaluation.
+- [Intermittent demand](intermittent_demand.ipynb) — Bernoulli occurrence and positive
+  Gamma quantities, stockout zeros, a naive baseline and full-availability scenarios.
+- [Comparing inference methods](inference_methods_comparison.ipynb) — the same ARMA
+  model fit with NUTS, ADVI, full-rank ADVI and Pathfinder; diagnostics, timing and scores.
 
 ```{toctree}
 :hidden:
 :maxdepth: 1
 
 forecasting_univariate
+arma
+intermittent_demand
+inference_methods_comparison
 hierarchical_forecasting
 victoria_electricity
 exponential_smoothing_state_space
