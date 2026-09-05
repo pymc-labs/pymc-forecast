@@ -7,6 +7,7 @@ boundary; this module converts them once, attaching real time coordinates
 (a ``DatetimeIndex``, periods, or a fallback integer range).
 """
 
+from numbers import Integral
 from typing import Literal
 
 import numpy as np
@@ -99,6 +100,13 @@ def as_dataarray(obj, *, role: Role = "data") -> xr.DataArray:
                     "pass an xarray.DataArray with named dims for higher-dimensional data"
                 )
                 raise AlignmentError(msg)
+        if isinstance(obj, pd.Series | pd.DataFrame) and isinstance(obj.index, pd.DatetimeIndex):
+            # Older xarray converts pandas' microsecond datetimes to ns and
+            # drops freq in the process. Restore the known frequency on the
+            # converted index, without forcing a datetime unit on newer xarray.
+            time_index = da.get_index(TIME_DIM)
+            if obj.index.freq is not None and time_index.freq is None:
+                da = da.assign_coords({TIME_DIM: pd.DatetimeIndex(time_index, freq=obj.index.freq)})
     if TIME_DIM not in da.coords:
         da = da.assign_coords({TIME_DIM: np.arange(da.sizes[TIME_DIM])})
     return da
@@ -129,8 +137,9 @@ def extend_time_index(index, horizon: int):
     """Extend a time index by ``horizon`` steps, inferring the spacing.
 
     Used to build the forecast horizon for covariate-free models: a
-    ``DatetimeIndex`` is extended at its inferred frequency, a numeric index by
-    its constant step. Returns the full ``observed + horizon`` index.
+    ``DatetimeIndex`` is extended at its stored or inferred frequency, a
+    ``PeriodIndex`` at its stored frequency, and a numeric index by its
+    constant step. Returns the full ``observed + horizon`` index.
 
     Raises
     ------
@@ -140,23 +149,31 @@ def extend_time_index(index, horizon: int):
     """
     import pandas as pd
 
-    if horizon < 0:
-        msg = f"horizon must be non-negative, got {horizon}"
+    if isinstance(horizon, bool) or not isinstance(horizon, Integral) or horizon < 0:
+        msg = f"horizon must be a non-negative integer, got {horizon}"
         raise AlignmentError(msg)
     idx = pd.Index(index)
     if horizon == 0:
         return idx
+    if len(idx) == 0 or not (idx.is_monotonic_increasing and idx.is_unique):
+        msg = "training time index must be non-empty and strictly increasing"
+        raise AlignmentError(msg)
+    if isinstance(idx, pd.PeriodIndex):
+        return idx.append(pd.period_range(idx[-1] + 1, periods=horizon, freq=idx.freq))
     if isinstance(idx, pd.DatetimeIndex):
-        freq = idx.freq or pd.infer_freq(idx)
+        freq = idx.freq or (pd.infer_freq(idx) if len(idx) >= 3 else None)
         if freq is None:
             msg = (
                 "cannot infer a frequency from the datetime index to build the "
-                "forecast horizon; pass explicit covariates instead of horizon="
+                "forecast horizon; pass future_index= or explicit covariates instead of horizon="
             )
             raise AlignmentError(msg)
         future = pd.date_range(idx[-1], periods=horizon + 1, freq=freq)[1:]
         return idx.append(future)
     values = np.asarray(idx)
+    if not np.issubdtype(values.dtype, np.number):
+        msg = "horizon= requires a numeric, datetime, or period time index; pass future_index="
+        raise AlignmentError(msg)
     if len(values) < 2:
         step = 1
     else:
@@ -240,36 +257,42 @@ def concat_covariates(covariates, future_covariates) -> xr.DataArray:
     """
     covariates = as_dataarray(covariates, role="covariates")
     fut = as_dataarray(future_covariates, role="covariates")
+    _validate_covariate_structure(covariates, fut)
+    concat_time_index(covariates[TIME_DIM].values, fut[TIME_DIM].values)
+    return xr.concat([covariates, fut], dim=TIME_DIM, join="exact")
+
+
+def _validate_covariate_structure(covariates: xr.DataArray, fut: xr.DataArray) -> None:
+    """Require identical non-time structure for every predict-time input path."""
     if covariates.dims != fut.dims:
         msg = (
-            "future covariates must have the same dims as the training "
+            "prediction covariates must have the same dims as the training "
             f"covariates: got {fut.dims}, expected {covariates.dims}"
         )
         raise AlignmentError(msg)
-    for dim in covariates.dims:
-        if dim == TIME_DIM:
+    _validate_shared_coords(covariates, fut, context="prediction covariates")
+
+
+def _validate_shared_coords(left: xr.DataArray, right: xr.DataArray, *, context: str) -> None:
+    """Reject positional ambiguity on shared non-time dimensions."""
+    for dim in left.dims:
+        if dim == TIME_DIM or dim not in right.dims:
             continue
-        if covariates.sizes[dim] != fut.sizes[dim]:
+        if left.sizes[dim] != right.sizes[dim]:
             msg = (
-                f"future covariates size mismatch along '{dim}': "
-                f"got {fut.sizes[dim]}, expected {covariates.sizes[dim]}"
+                f"{context} size mismatch along '{dim}': "
+                f"got {right.sizes[dim]}, expected {left.sizes[dim]}"
             )
             raise AlignmentError(msg)
-        if (dim in covariates.coords) != (dim in fut.coords):
+        if (dim in left.coords) != (dim in right.coords):
+            msg = f"{context} must carry matching '{dim}' coordinates; one side is unlabeled"
+            raise AlignmentError(msg)
+        if dim in left.coords and not left.get_index(dim).equals(right.get_index(dim)):
             msg = (
-                f"future covariates must carry a '{dim}' coord exactly when the "
-                "training covariates do; one side is unlabeled"
+                f"{context} '{dim}' coords must match (same names, same order): "
+                f"got {right[dim].values!r}, expected {left[dim].values!r}"
             )
             raise AlignmentError(msg)
-        if dim in covariates.coords and not np.array_equal(covariates[dim].values, fut[dim].values):
-            msg = (
-                f"future covariates '{dim}' coords must match the training "
-                f"covariates' (same names, same order): got {fut[dim].values!r}, "
-                f"expected {covariates[dim].values!r}"
-            )
-            raise AlignmentError(msg)
-    concat_time_index(covariates[TIME_DIM].values, fut[TIME_DIM].values)
-    return xr.concat([covariates, fut], dim=TIME_DIM, join="exact")
 
 
 def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
@@ -277,7 +300,9 @@ def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
 
     ``covariates`` must be at least as long as ``data`` along ``"time"``, and
     the first ``len(data.time)`` coordinate values must match exactly — the
-    surplus is the forecast horizon.
+    surplus is the forecast horizon and must be strictly increasing after
+    training. Shared non-time dimensions must have identical sizes and
+    coordinates, so panel covariates cannot silently change series order.
     """
     t_obs = data.sizes[TIME_DIM]
     if covariates.sizes[TIME_DIM] < t_obs:
@@ -293,3 +318,6 @@ def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
             f"'{TIME_DIM}' coords; the arrays are misaligned"
         )
         raise AlignmentError(msg)
+    _validate_shared_coords(data, covariates, context="data and covariates")
+    if covariates.sizes[TIME_DIM] > t_obs:
+        concat_time_index(data[TIME_DIM].values, covariates[TIME_DIM].values[t_obs:])
