@@ -104,6 +104,8 @@ With `posterior=` given, the `chain`/`draw` sizes and coordinates of every
 result equal the posterior's, and `num_samples` must not be passed. This
 includes the optional expected-observation outputs, so each expected
 observation and latent predictor at draw *i* use the same parameter draw.
+The same coordinates are retained when `batch_size=` splits predictive
+sampling into blocks.
 
 ## Mapping onto downstream coordinates
 

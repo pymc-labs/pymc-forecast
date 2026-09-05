@@ -19,6 +19,8 @@ breaking change, made only in a minor release and called out here.
   names are reserved unconditionally: a model body that defines its own
   variable under either name now raises `HorizonError`, whether or not it uses
   the new argument ([#52](https://github.com/pymc-labs/pymc-forecast/issues/52)).
+- Preserve supplied posterior draw coordinates when `batch_size=` splits
+  predictive sampling into blocks, including the expected-observation outputs.
 - Validate non-time dimensions and coordinates on every forecast covariate
   input path and shared panel dimensions during model construction. Reordered
   or renamed features now raise before posterior sampling instead of silently

@@ -153,13 +153,12 @@ def _group_datasets(result) -> dict[str, xr.Dataset]:
 
 
 def _concat_draw_chunks(chunks: list):
-    """Reassemble chunked predictive results into one draw-contiguous result.
+    """Reassemble chunked predictive results in posterior draw order.
 
-    Groups carrying a ``draw`` dim are concatenated with renumbered,
-    contiguous draw coords; draw-free groups (constant data, observed data)
-    are taken from the first chunk — they are identical across chunks by
-    construction. The result has the same type and group structure as a
-    single-pass call.
+    Groups carrying a ``draw`` dim retain the posterior's draw coordinates;
+    draw-free groups (constant data, observed data) are taken from the first
+    chunk — they are identical across chunks by construction. The result has
+    the same type and group structure as a single-pass call.
     """
     template = chunks[0]
     chunk_groups = [_group_datasets(chunk) for chunk in chunks]
@@ -168,14 +167,7 @@ def _concat_draw_chunks(chunks: list):
         if DRAW_DIM not in first.dims:
             groups[name] = first
             continue
-        parts = []
-        offset = 0
-        for chunk in chunk_groups:
-            ds = chunk[name]
-            draws = np.arange(offset, offset + ds.sizes[DRAW_DIM])
-            parts.append(ds.assign_coords({DRAW_DIM: draws}))
-            offset += ds.sizes[DRAW_DIM]
-        groups[name] = xr.concat(parts, dim=DRAW_DIM)
+        groups[name] = xr.concat([chunk[name] for chunk in chunk_groups], dim=DRAW_DIM)
     if hasattr(template, "children"):
         tree = xr.DataTree.from_dict(groups)
         tree.attrs.update(template.attrs)

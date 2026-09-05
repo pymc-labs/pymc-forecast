@@ -7,7 +7,7 @@ from example_models import linear_model, make_trend_data, poisson_model
 
 from pymc_forecast.data import TIME_DIM
 from pymc_forecast.exceptions import HorizonError
-from pymc_forecast.model import build_model
+from pymc_forecast.model import ForecastingModel, build_model
 from pymc_forecast.prediction import (
     forecast,
     posterior_dataset,
@@ -97,7 +97,8 @@ class TestForecast:
 
 
 class TestExpectedObservation:
-    def test_poisson_log_link_keeps_eta_and_emits_expected_counts(self):
+    @pytest.mark.parametrize("batch_size", [None, 2])
+    def test_poisson_log_link_keeps_eta_and_emits_expected_counts(self, batch_size):
         covariates = xr.DataArray(
             np.linspace(-0.5, 0.5, 5)[:, None],
             dims=("time", "covariate"),
@@ -116,10 +117,14 @@ class TestExpectedObservation:
         )
 
         pre = prediction_samples(
-            predict_in_sample(poisson_model, posterior, data, covariates, random_seed=SEED)
+            predict_in_sample(
+                poisson_model, posterior, data, covariates, batch_size=batch_size, random_seed=SEED
+            )
         )
         post = prediction_samples(
-            forecast(poisson_model, posterior, data, covariates, random_seed=SEED)
+            forecast(
+                poisson_model, posterior, data, covariates, batch_size=batch_size, random_seed=SEED
+            )
         )
         eta = (
             posterior["intercept"].values[..., None]
@@ -144,6 +149,59 @@ class TestExpectedObservation:
         np.testing.assert_array_equal(post["draw"], posterior["draw"])
         np.testing.assert_array_equal(pre["time"], data["time"])
         np.testing.assert_array_equal(post["time_future"], covariates["time"][3:])
+
+    def test_lognormal_panel_expectation_uses_scale_parameter(self):
+        # LogNormal's mean depends on sigma as well as its location. The OO
+        # helper must preserve that explicit expression and the panel labels.
+        class LogNormalPanel(ForecastingModel):
+            def model(self, h, covariates):
+                location = pm.Normal("location")
+                sigma = pm.HalfNormal("sigma", dims="series")
+                eta = pt.broadcast_to(location, (h.duration, 1))
+                self.predict(
+                    lambda name, window, dims, observed: pm.LogNormal(
+                        name, window, sigma, dims=dims, observed=observed
+                    ),
+                    eta,
+                    expected_observation=pt.exp(eta + sigma**2 / 2),
+                )
+
+        data = xr.DataArray(
+            [[1.0, 2.0, 1.0], [2.0, 1.0, 3.0]],
+            dims=("series", "time"),
+            coords={"series": ["north", "south"], "time": [10, 20, 30]},
+        )
+        covariates = xr.DataArray(
+            np.empty((5, 0)),
+            dims=("time", "covariate"),
+            coords={"time": [10, 20, 30, 40, 50]},
+        )
+        posterior = xr.Dataset(
+            {
+                "location": (("chain", "draw"), [[0.0, 0.5]]),
+                "sigma": (("chain", "draw", "series"), [[[0.2, 0.8], [0.4, 1.0]]]),
+            },
+            coords={"chain": [3], "draw": [5, 9], "series": data["series"]},
+        )
+        expected_mean = np.exp(
+            posterior["location"].values[..., None] + posterior["sigma"].values ** 2 / 2
+        )
+        model = LogNormalPanel()
+        for driver, name, time_dim, index in (
+            (predict_in_sample, "expected_observation", "time", data["time"]),
+            (forecast, "expected_observation_future", "time_future", covariates["time"][3:]),
+        ):
+            samples = prediction_samples(
+                driver(model, posterior, data, covariates, random_seed=SEED)
+            )
+            expected = samples[name]
+            assert expected.dims == ("chain", "draw", time_dim, "series")
+            np.testing.assert_allclose(
+                expected, np.broadcast_to(expected_mean[:, :, None, :], expected.shape)
+            )
+            for dim in ("chain", "draw", "series"):
+                np.testing.assert_array_equal(expected[dim], posterior[dim])
+            np.testing.assert_array_equal(expected[time_dim], index)
 
 
 class TestDrawLevelSamples:
