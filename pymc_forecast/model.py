@@ -181,17 +181,6 @@ def time_series(
     return pt.concatenate([prefix, suffix], axis=0)
 
 
-def _register_predictor(model: pm.Model, name: str, predictor_slice, dims: tuple[str, ...]) -> None:
-    """Record a predictor slice as a named Deterministic.
-
-    The predictor is broadcast to the variable's full shape so it mirrors the
-    observation variable even when the model body relies on broadcasting
-    (the likelihood broadcasts its parameters the same way).
-    """
-    shape = [model.dim_lengths[d] for d in dims]
-    pm.Deterministic(name, pt.broadcast_to(predictor_slice, shape), dims=dims)
-
-
 def _join_names(names: Sequence[str]) -> str:
     """Render names as a comma-separated list with a final "and"."""
     quoted = [repr(name) for name in names]
@@ -281,24 +270,30 @@ def predict(
             "generated predictive outputs — rename the model variable"
         )
         raise HorizonError(msg)
+    # Broadcast the recorded predictors over the full panel before slicing.
+    # Broadcasting an already-sliced singleton panel axis can be rewritten
+    # incorrectly by PyTensor 3.3, producing a shape error for mu_future.
+    shape = (h.duration, *(model.dim_lengths[d] for d in dims))
+    latent_output = pt.broadcast_to(latent, shape)
+    expected_output = (
+        None if expected_observation is None else pt.broadcast_to(expected_observation, shape)
+    )
     obs_fn(OBS_VAR, latent[: h.t_obs], (TIME_DIM, *dims), observed)
-    _register_predictor(model, MU_VAR, latent[: h.t_obs], (TIME_DIM, *dims))
-    if expected_observation is not None:
-        _register_predictor(
-            model,
+    pm.Deterministic(MU_VAR, latent_output[: h.t_obs], dims=(TIME_DIM, *dims))
+    if expected_output is not None:
+        pm.Deterministic(
             EXPECTED_OBSERVATION_VAR,
-            expected_observation[: h.t_obs],
-            (TIME_DIM, *dims),
+            expected_output[: h.t_obs],
+            dims=(TIME_DIM, *dims),
         )
     if h.future > 0:
         obs_fn(FORECAST_VAR, latent[h.t_obs :], (FUTURE_DIM, *dims), None)
-        _register_predictor(model, MU_FORECAST_VAR, latent[h.t_obs :], (FUTURE_DIM, *dims))
-        if expected_observation is not None:
-            _register_predictor(
-                model,
+        pm.Deterministic(MU_FORECAST_VAR, latent_output[h.t_obs :], dims=(FUTURE_DIM, *dims))
+        if expected_output is not None:
+            pm.Deterministic(
                 EXPECTED_OBSERVATION_FORECAST_VAR,
-                expected_observation[h.t_obs :],
-                (FUTURE_DIM, *dims),
+                expected_output[h.t_obs :],
+                dims=(FUTURE_DIM, *dims),
             )
 
 

@@ -187,15 +187,26 @@ class TestExpectedObservation:
             posterior["location"].values[..., None] + posterior["sigma"].values ** 2 / 2
         )
         model = LogNormalPanel()
-        for driver, name, time_dim, index in (
-            (predict_in_sample, "expected_observation", "time", data["time"]),
-            (forecast, "expected_observation_future", "time_future", covariates["time"][3:]),
+        for driver, name, latent_name, time_dim, index in (
+            (predict_in_sample, "expected_observation", "mu", "time", data["time"]),
+            (
+                forecast,
+                "expected_observation_future",
+                "mu_future",
+                "time_future",
+                covariates["time"][3:],
+            ),
         ):
             samples = prediction_samples(
                 driver(model, posterior, data, covariates, random_seed=SEED)
             )
             expected = samples[name]
             assert expected.dims == ("chain", "draw", time_dim, "series")
+            assert samples[latent_name].dims == expected.dims
+            np.testing.assert_allclose(
+                samples[latent_name],
+                np.broadcast_to(posterior["location"].values[:, :, None, None], expected.shape),
+            )
             np.testing.assert_allclose(
                 expected, np.broadcast_to(expected_mean[:, :, None, :], expected.shape)
             )
