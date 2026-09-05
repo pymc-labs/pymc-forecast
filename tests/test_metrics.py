@@ -41,6 +41,17 @@ class TestPointMetrics:
 
 
 class TestCrps:
+    @pytest.mark.parametrize("dtype", [np.int8, np.uint8, np.int16, np.float16, np.float32])
+    def test_count_and_low_precision_samples_match_float64(self, dtype):
+        pred = np.arange(100, dtype=dtype)[:, None]
+        truth = np.array([50], dtype=dtype)
+        # Analytic sum of all 10,000 pairwise distances of the discrete uniform.
+        assert crps_empirical(pred, truth).item() == pytest.approx(8.335)
+
+    def test_signed_integer_subtraction_does_not_overflow(self):
+        pred = np.array([[-128], [127]], dtype=np.int8)
+        assert crps_empirical(pred, np.array([0], dtype=np.int8)).item() == pytest.approx(63.75)
+
     def test_matches_bruteforce(self, gaussian_pred):
         pred, truth = gaussian_pred
         fast = crps_empirical(pred, truth)
@@ -110,6 +121,50 @@ class TestMase:
 
 
 class TestLabeledInputs:
+    @pytest.mark.parametrize("metric", list(DEFAULT_METRICS.values()))
+    def test_truth_is_aligned_on_time_and_series_coordinates(self, metric):
+        pred = xr.DataArray(
+            np.tile([[0.0, 10.0], [100.0, 110.0]], (3, 1, 1)),
+            dims=("draw", "time_future", "series"),
+            coords={"time_future": [10, 11], "series": ["a", "b"]},
+        )
+        truth = pred.isel(draw=0, drop=True)
+        reordered = truth.sel(time_future=[11, 10], series=["b", "a"]).transpose()
+        assert metric(pred, reordered) == metric(pred, truth)
+
+    @pytest.mark.parametrize("coords", [[90, 91], [10, 10], [10]])
+    def test_different_duplicate_or_missing_truth_coordinates_rejected(self, coords):
+        pred = xr.DataArray(
+            np.zeros((3, 2)), dims=("draw", "time_future"), coords={"time_future": [10, 11]}
+        )
+        truth = xr.DataArray(
+            np.zeros(len(coords)), dims="time_future", coords={"time_future": coords}
+        )
+        with pytest.raises(ValueError, match=r"coordinates|sizes"):
+            eval_mae(pred, truth)
+
+    def test_duplicate_prediction_coordinates_rejected(self):
+        pred = xr.DataArray(
+            np.zeros((3, 2)), dims=("draw", "time_future"), coords={"time_future": [10, 10]}
+        )
+        truth = xr.DataArray([0.0, 0.0], dims="time_future", coords={"time_future": [10, 11]})
+        with pytest.raises(ValueError, match="unique"):
+            eval_mae(pred, truth)
+
+    def test_unlabeled_truth_still_uses_shape(self):
+        pred = xr.DataArray(
+            np.zeros((3, 2)), dims=("draw", "time_future"), coords={"time_future": [10, 11]}
+        )
+        assert eval_mae(pred, xr.DataArray([0.0, 0.0], dims="time_future")) == 0
+
+    def test_numpy_truth_is_not_silently_broadcast(self):
+        with pytest.raises(ValueError, match="truth shape"):
+            eval_mae(np.zeros((3, 2)), np.zeros(1))
+
+    def test_empty_samples_rejected(self):
+        with pytest.raises(ValueError, match="at least one sample"):
+            eval_mae(np.zeros((0, 2)), np.zeros(2))
+
     def test_chain_draw_dims_stacked(self):
         pred = xr.DataArray(
             RNG.normal(size=(2, 50, 4)),

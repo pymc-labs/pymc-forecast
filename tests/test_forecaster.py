@@ -108,6 +108,32 @@ class TestForecasterVI:
 
 
 class TestJAXForecasterVI:
+    def test_conjugate_normal_posterior(self):
+        pytest.importorskip("jax")
+
+        def model(h, covariates):
+            theta = pm.Normal("theta", 0.0, 1.0)
+            predict(
+                h,
+                lambda name, mu, dims, obs: pm.Normal(name, mu, 1.0, dims=dims, observed=obs),
+                pt.ones(h.duration) * theta,
+            )
+
+        fc = Forecaster(
+            model,
+            np.full(20, 2.0),
+            backend="jax",
+            optimizer=0.002,
+            num_steps=20_000,
+            random_seed=123,
+        )
+        samples = fc.draw_posterior(10_000, random_seed=321)["theta"].values
+        expected_mean, expected_sd = 40 / 21, np.sqrt(1 / 21)
+        # Allow stochastic optimizer noise while detecting an incorrect ELBO
+        # sign, transform, or variational scale, rather than just finite output.
+        assert abs(samples.mean() - expected_mean) < 0.15 * expected_sd
+        assert samples.std() == pytest.approx(expected_sd, rel=0.12)
+
     def test_end_to_end(self):
         pytest.importorskip("jax")
         data, cov = make_trend_data()

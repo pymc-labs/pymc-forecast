@@ -18,11 +18,13 @@ import xarray as xr
 
 from pymc_forecast.data import (
     TIME_DIM,
+    _validate_covariate_structure,
     as_dataarray,
     concat_covariates,
     concat_time_index,
     extend_time_index,
     null_covariates,
+    validate_alignment,
 )
 from pymc_forecast.exceptions import (
     AlignmentError,
@@ -266,7 +268,10 @@ class BaseForecaster(abc.ABC):
         ----------
         covariates
             Covariates spanning training window + forecast horizon (time coords
-            must extend the training data's).
+            must extend the training data's). Non-time dimensions and coordinate
+            names/order must match the training covariates, as with
+            ``future_covariates``; reordered or renamed columns are rejected
+            before posterior sampling.
         num_samples
             Number of posterior draws (and forecast samples); default 100.
             Mutually exclusive with ``posterior``.
@@ -324,12 +329,16 @@ class BaseForecaster(abc.ABC):
                 )
                 raise AlignmentError(msg)
             if horizon is not None:
-                full_index = extend_time_index(self._data[TIME_DIM].values, horizon)
+                full_index = extend_time_index(self._data.get_index(TIME_DIM), horizon)
             else:
                 full_index = concat_time_index(self._data[TIME_DIM].values, future_index)
             covariates = null_covariates(full_index)
         elif future_covariates is not None:
             covariates = concat_covariates(self._covariates, future_covariates)
+        else:
+            covariates = as_dataarray(covariates, role="covariates")
+            _validate_covariate_structure(self._covariates, covariates)
+        validate_alignment(self._data, covariates)
         posterior = self._resolve_posterior(posterior, num_samples, random_seed)
         return _forecast(
             self.model_fn,

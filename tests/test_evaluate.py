@@ -29,6 +29,24 @@ def window_list(duration, **kwargs):
 
 
 class TestWindows:
+    @pytest.mark.parametrize("test_window", [0, -1, 1])
+    def test_test_window_must_meet_minimum(self, test_window):
+        with pytest.raises(BacktestWindowError, match=r"test_window .* must be >="):
+            window_list(10, min_train_window=5, min_test_window=3, test_window=test_window)
+
+    @pytest.mark.parametrize(
+        "name", ["train_window", "min_train_window", "test_window", "min_test_window", "stride"]
+    )
+    @pytest.mark.parametrize("value", [1.5, True])
+    def test_window_sizes_must_be_integers(self, name, value):
+        with pytest.raises(BacktestWindowError, match=f"{name} must be an integer"):
+            window_list(10, **{name: value})
+
+    @pytest.mark.parametrize("name", ["min_train_window", "min_test_window", "stride"])
+    def test_required_window_sizes_cannot_be_none(self, name):
+        with pytest.raises(BacktestWindowError, match=f"{name} must be an integer"):
+            window_list(10, **{name: None})
+
     def test_expanding(self):
         splits = window_list(10, min_train_window=6, test_window=2, stride=2)
         assert splits == [(0, 6, 8), (0, 8, 10)]

@@ -11,6 +11,7 @@ the predictions keep their real time coords.
 
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
+from numbers import Integral
 from time import perf_counter
 from typing import Any, Literal
 
@@ -86,11 +87,26 @@ def _windows(
     stride: int,
 ) -> Iterator[tuple[int, int, int]]:
     """Yield ``(t0, t1, t2)`` split points (bookkeeping ported from Pyro)."""
+    for name, value in {
+        "train_window": train_window,
+        "min_train_window": min_train_window,
+        "test_window": test_window,
+        "min_test_window": min_test_window,
+        "stride": stride,
+    }.items():
+        if value is None and name in ("train_window", "test_window"):
+            continue
+        if isinstance(value, bool) or not isinstance(value, Integral):
+            msg = f"{name} must be an integer, got {value!r}"
+            raise BacktestWindowError(msg)
     if min_train_window < 1:
         msg = f"min_train_window must be >= 1, got {min_train_window}"
         raise BacktestWindowError(msg)
     if min_test_window < 1:
         msg = f"min_test_window must be >= 1, got {min_test_window}"
+        raise BacktestWindowError(msg)
+    if test_window is not None and test_window < min_test_window:
+        msg = f"test_window ({test_window}) must be >= min_test_window ({min_test_window})"
         raise BacktestWindowError(msg)
     if stride < 1:
         msg = f"stride must be >= 1, got {stride}"

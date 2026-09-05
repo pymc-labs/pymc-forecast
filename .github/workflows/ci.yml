@@ -36,6 +36,39 @@ jobs:
       - run: uv sync --all-extras --group docs
       - run: uv run sphinx-build -b html -W --keep-going docs docs/_build/html
 
+  base-package:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dependencies: current
+            constraints: ""
+          - dependencies: minimum
+            # Older ArviZ needs matplotlib.style.core; retain a compatible release.
+            constraints: "pymc==5.20.0 arviz==0.20.0 xarray==2024.10.0 matplotlib<3.10"
+    name: base package (${{ matrix.dependencies }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+      - run: uv build --wheel
+      - name: Install wheel without optional extras
+        env:
+          DEPENDENCY_CONSTRAINTS: ${{ matrix.constraints }}
+        run: |
+          uv venv --python 3.11 "${RUNNER_TEMP}/base-venv"
+          uv pip install --python "${RUNNER_TEMP}/base-venv/bin/python" dist/*.whl pytest ${DEPENDENCY_CONSTRAINTS}
+      - name: Test the installed base package
+        run: |
+          cd "${RUNNER_TEMP}"
+          "${RUNNER_TEMP}/base-venv/bin/python" -m pytest --import-mode=importlib \
+            "${GITHUB_WORKSPACE}/tests/test_package.py" \
+            "${GITHUB_WORKSPACE}/tests/test_data.py" \
+            "${GITHUB_WORKSPACE}/tests/test_metrics.py" \
+            "${GITHUB_WORKSPACE}/tests/test_alignment.py"
+
   notebooks:
     runs-on: ubuntu-latest
     steps:

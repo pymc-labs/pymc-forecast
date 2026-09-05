@@ -170,6 +170,18 @@ def regression_forecaster():
 class TestRegressionCovariates:
     """Future covariate values reach the statespace forecast as the scenario."""
 
+    def test_full_covariate_names_rejected_before_posterior_sampling(
+        self, regression_forecaster, monkeypatch
+    ):
+        forecaster, _, cov = regression_forecaster
+
+        def unexpected(*args, **kwargs):
+            raise AssertionError("invalid coordinates must fail before sampling")
+
+        monkeypatch.setattr(forecaster, "_resolve_posterior", unexpected)
+        with pytest.raises(AlignmentError, match="coords must match"):
+            forecaster.forecast(cov.assign_coords(covariate=["wrong_feature"]))
+
     def test_future_covariates_flow_through(self, regression_forecaster):
         forecaster, _, cov = regression_forecaster
         tree = forecaster.forecast(cov, num_samples=20, random_seed=SEED)
