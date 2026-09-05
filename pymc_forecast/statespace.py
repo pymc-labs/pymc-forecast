@@ -32,6 +32,7 @@ import xarray as xr
 from pymc_forecast.data import (
     FUTURE_DIM,
     TIME_DIM,
+    _validate_covariate_structure,
     as_dataarray,
     concat_covariates,
     concat_time_index,
@@ -359,7 +360,8 @@ class StatespaceForecaster(HMCForecaster):
         ----------
         covariates
             Covariates spanning training window + forecast horizon (time
-            coords must extend the training data's).
+            coords must extend the training data's). Non-time dimensions and
+            coordinate names/order must match the training covariates.
         num_samples
             Number of posterior draws (and forecast samples); default 100.
             Mutually exclusive with ``posterior``.
@@ -403,7 +405,7 @@ class StatespaceForecaster(HMCForecaster):
             raise ValueError(msg)
         t_obs = self._data.sizes[TIME_DIM]
         if horizon is not None:
-            full_index = extend_time_index(self._data[TIME_DIM].values, horizon)
+            full_index = extend_time_index(self._data.get_index(TIME_DIM), horizon)
             cov = null_covariates(np.asarray(full_index))
         elif future_index is not None:
             full_index = concat_time_index(self._data[TIME_DIM].values, future_index)
@@ -412,6 +414,7 @@ class StatespaceForecaster(HMCForecaster):
             cov = concat_covariates(self._covariates, future_covariates)
         else:
             cov = as_dataarray(covariates, role="covariates")
+            _validate_covariate_structure(self._covariates, cov)
             validate_alignment(self._data, cov)
         future_covariates = cov.isel({TIME_DIM: slice(t_obs, None)})
         future_coords = future_covariates[TIME_DIM].values

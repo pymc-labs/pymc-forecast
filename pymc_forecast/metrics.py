@@ -5,8 +5,10 @@ Inputs may be labeled (``xarray.DataArray``) or raw numpy:
 
 - **DataArray predictions** carry their sample dimensions by name — ``chain`` /
   ``draw`` (as produced by the forecast drivers) or an already-stacked
-  ``sample`` dim. Labeled truth is transposed to the prediction's dim order, so
-  callers never think about axis positions.
+  ``sample`` dim. Labeled truth is transposed to the prediction's dim order
+  and reordered to matching coordinates. Different or duplicate labels are
+  rejected. Unlabeled inputs are positional and must match the value shape
+  exactly; implicit broadcasting is rejected.
 - **numpy predictions** follow the classical convention: sample axis first.
 
 Ported from numpyro_forecast (itself porting ``pyro.ops.stats.crps_empirical``)
@@ -59,10 +61,32 @@ def _as_sample_first(pred, truth) -> tuple[np.ndarray, np.ndarray]:
                 msg = f"truth is missing prediction dims {missing}"
                 raise ValueError(msg)
             truth = truth.transpose(*value_dims)
+            for dim in value_dims:
+                if pred.sizes[dim] != truth.sizes[dim]:
+                    msg = f"prediction and truth sizes must match along '{dim}'"
+                    raise ValueError(msg)
+                if dim in pred.coords and dim in truth.coords:
+                    pred_index, truth_index = pred.get_index(dim), truth.get_index(dim)
+                    if not (pred_index.is_unique and truth_index.is_unique):
+                        msg = f"prediction and truth coordinates must be unique along '{dim}'"
+                        raise ValueError(msg)
+                    if pred_index.equals(truth_index):
+                        continue
+                    indexer = truth_index.get_indexer(pred_index)
+                    if (indexer < 0).any():
+                        msg = f"prediction and truth coordinates must match along '{dim}'"
+                        raise ValueError(msg)
+                    truth = truth.isel({dim: indexer})
         pred_np = pred.values.reshape(-1, *pred.shape[len(sample_dims) :])
     else:
         pred_np = np.asarray(pred)
     truth_np = np.asarray(truth.values if isinstance(truth, xr.DataArray) else truth)
+    if pred_np.ndim < 1 or pred_np.shape[1:] != truth_np.shape:
+        msg = "truth shape must equal prediction shape without the sample axis"
+        raise ValueError(msg)
+    if pred_np.shape[0] == 0:
+        msg = "predictions must contain at least one sample"
+        raise ValueError(msg)
     return pred_np, truth_np
 
 
@@ -90,6 +114,10 @@ def crps_empirical(pred, truth) -> np.ndarray:
         Elementwise CRPS, one value per data location.
     """
     pred, truth = _as_sample_first(pred, truth)
+    # Integer counts and low-precision forecasts must not overflow in pairwise
+    # differences or the quadratic sample weights.
+    pred = pred.astype(np.float64, copy=False)
+    truth = truth.astype(np.float64, copy=False)
     num_samples = pred.shape[0]
     if num_samples < 2:
         msg = f"crps_empirical needs at least 2 samples, got {num_samples}"

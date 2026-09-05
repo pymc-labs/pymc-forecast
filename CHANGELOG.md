@@ -8,6 +8,20 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- Validate non-time dimensions and coordinates on every forecast covariate
+  input path and shared panel dimensions during model construction. Reordered
+  or renamed features now raise before posterior sampling instead of silently
+  resampling fitted coefficients; invalid future time coordinates also raise.
+- Align labeled forecast metrics on matching time/series coordinates, rejecting
+  different or duplicate labels and incompatible shapes. CRPS now calculates
+  in float64 to avoid overflow for integer counts and low-precision samples.
+- Support `horizon=` with pandas `PeriodIndex` and preserve stored datetime
+  frequencies for short training series. Reject empty/non-increasing indices
+  and invalid forecast/backtest window sizes with actionable errors.
+- Require `xarray>=2024.10` for `DataTree` support. CI tests the installed wheel
+  without optional extras, against both current and minimum direct dependencies.
+  Add a conjugate-posterior accuracy regression test for JAX ADVI.
+
 - GPU variational inference: `Forecaster(..., backend="jax")` optimizes PyMC's
   mean-field ADVI objective with a JAX-native `lax.scan` (on GPU when a CUDA
   JAX is installed) and returns the usual PyMC approximation; requires the new

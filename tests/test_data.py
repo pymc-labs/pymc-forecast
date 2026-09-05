@@ -67,6 +67,31 @@ class TestNullCovariates:
 
 
 class TestExtendTimeIndex:
+    @pytest.mark.parametrize("freq", ["M", "Q", "2M"])
+    def test_period_index(self, freq):
+        index = pd.period_range("2024-01", periods=3, freq=freq)
+        result = extend_time_index(index.values, 2)
+        assert result.equals(pd.period_range("2024-01", periods=5, freq=freq))
+
+    @pytest.mark.parametrize("index", [[], [0, 0], [2, 1]])
+    def test_empty_or_non_increasing_index_rejected(self, index):
+        with pytest.raises(AlignmentError, match="non-empty and strictly increasing"):
+            extend_time_index(index, 2)
+
+    @pytest.mark.parametrize("horizon", [1.5, True])
+    def test_non_integer_horizon_rejected(self, horizon):
+        with pytest.raises(AlignmentError, match="integer"):
+            extend_time_index([0, 1], horizon)
+
+    def test_two_dates_with_frequency(self):
+        index = pd.date_range("2024-01-01", periods=2, freq="D")
+        assert extend_time_index(index, 1)[-1] == pd.Timestamp("2024-01-03")
+
+    def test_short_datetime_without_frequency_has_actionable_error(self):
+        index = pd.date_range("2024-01-01", periods=2, freq="D").values
+        with pytest.raises(AlignmentError, match="future_index="):
+            extend_time_index(index, 1)
+
     def test_datetime_inferred_freq(self):
         idx = pd.date_range("2024-01-07", periods=5, freq="W")
         out = extend_time_index(idx, 3)
@@ -92,6 +117,13 @@ class TestExtendTimeIndex:
 
 
 class TestValidateAlignment:
+    @pytest.mark.parametrize("future", [[3, 2], [3, 3], [1, 2]])
+    def test_invalid_future_coordinates_rejected(self, future):
+        data = as_dataarray(np.arange(3.0))
+        cov = null_covariates([0, 1, 2, *future])
+        with pytest.raises(AlignmentError, match="strictly"):
+            validate_alignment(data, cov)
+
     def test_ok_when_covariates_extend(self):
         data = as_dataarray(np.arange(3.0))
         cov = as_dataarray(np.zeros((5, 1)), role="covariates")

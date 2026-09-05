@@ -22,7 +22,7 @@ dependencies = [
     "arviz>=0.20",
     "numpy",
     "pooch",
-    "xarray",
+    "xarray>=2024.10",
 ]
 
 [project.optional-dependencies]
