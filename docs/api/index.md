@@ -14,6 +14,7 @@ the modules group the reference by responsibility.
 - [`pymc_forecast.priors`](priors.md) — pymc-extras `Prior` interop: declarative, user-injectable priors for the model primitives.
 - [`pymc_forecast.gaussian`](gaussian.md) — Time-correlated Gaussian observation noise: `predict_mvn` and the explicit Gaussian conditional.
 - [`pymc_forecast.markov`](markov.md) — Scan-based Markov latents: `markov_time_series`.
+- [`pymc_forecast.ssoe`](ssoe.md) — Observation-driven recursions: `ssoe` and `SSOEResult`.
 - [`pymc_forecast.statespace`](statespace.md) — pymc-extras statespace interop: `StatespaceModel` and `StatespaceForecaster`.
 - [`pymc_forecast.exceptions`](exceptions.md) — The package's error taxonomy.
 
@@ -32,6 +33,7 @@ data
 priors
 gaussian
 markov
+ssoe
 statespace
 exceptions
 ```
