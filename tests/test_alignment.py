@@ -104,4 +104,4 @@ def test_forecast_preserves_short_index_frequency(index):
     fc = FixedForecaster(model, pd.Series([0.0, 0.0], index=index))
     posterior = xr.Dataset({"theta": (("chain", "draw"), [[0.0, 0.0]])})
     result = fc.forecast(horizon=1, posterior=posterior, random_seed=1)
-    assert result["predictions"].get_index("time_future")[0] == index[-1] + index.freq
+    assert result["predictions"]["forecast"].get_index("time_future")[0] == index[-1] + index.freq
