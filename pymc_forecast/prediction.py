@@ -204,6 +204,10 @@ def _sample_predictive(
     num_draws = posterior_ds.sizes[DRAW_DIM]
     if batch_size is None or num_draws <= batch_size:
         return pm.sample_posterior_predictive(posterior_ds, random_seed=random_seed, **kwargs)
+    # Materialize implicit draw indices before slicing, otherwise PyMC starts
+    # a new zero-based index in each batch of an unlabeled posterior Dataset.
+    if DRAW_DIM not in posterior_ds.coords:
+        posterior_ds = posterior_ds.assign_coords({DRAW_DIM: np.arange(num_draws)})
     starts = range(0, num_draws, batch_size)
     seeds = _chunk_seeds(random_seed, len(starts))
     chunks = [

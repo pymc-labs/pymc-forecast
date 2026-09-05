@@ -98,7 +98,8 @@ class TestForecast:
 
 class TestExpectedObservation:
     @pytest.mark.parametrize("batch_size", [None, 2])
-    def test_poisson_log_link_keeps_eta_and_emits_expected_counts(self, batch_size):
+    @pytest.mark.parametrize("labeled_draws", [True, False])
+    def test_poisson_log_link_keeps_eta_and_emits_expected_counts(self, batch_size, labeled_draws):
         covariates = xr.DataArray(
             np.linspace(-0.5, 0.5, 5)[:, None],
             dims=("time", "covariate"),
@@ -115,6 +116,8 @@ class TestExpectedObservation:
             },
             coords={"chain": [2, 4], "draw": [10, 20, 30], "covariate": ["x"]},
         )
+        if not labeled_draws:
+            posterior = posterior.drop_vars("draw")
 
         pre = prediction_samples(
             predict_in_sample(
