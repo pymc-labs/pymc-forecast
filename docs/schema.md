@@ -14,7 +14,7 @@ one predictive group:
 | Producer | Group | Contents |
 |---|---|---|
 | `forecast(...)` | `predictions` | out-of-sample forecasts |
-| `predict_in_sample(...)` | `posterior_predictive` | in-sample predictive of the observed variable, plus its latent predictor |
+| `predict_in_sample(...)` | `posterior_predictive` | in-sample predictive of the observed variable, plus its registered noise-free predictors |
 
 The group names follow the ArviZ convention (out-of-sample predictions live in
 `predictions`). {func}`pymc_forecast.prediction_samples` extracts the samples
@@ -26,19 +26,37 @@ The group names follow the ArviZ convention (out-of-sample predictions live in
 |---|---|---|---|
 | `obs` | {data}`pymc_forecast.OBS_VAR` | `posterior_predictive` | the observed (in-sample) variable |
 | `mu` | {data}`pymc_forecast.MU_VAR` | `posterior_predictive` | noise-free latent predictor over the observed window |
+| `expected_observation` | {data}`pymc_forecast.EXPECTED_OBSERVATION_VAR` | `posterior_predictive` | optional conditional expected observation over the observed window |
 | `forecast` | {data}`pymc_forecast.FORECAST_VAR` | `predictions` | the forecast-horizon variable |
 | `mu_future` | {data}`pymc_forecast.MU_FORECAST_VAR` | `predictions` | noise-free latent predictor over the forecast horizon |
+| `expected_observation_future` | {data}`pymc_forecast.EXPECTED_OBSERVATION_FORECAST_VAR` | `predictions` | optional conditional expected observation over the forecast horizon |
 | `{name}_future` | — | `predictions` | forecast-horizon slice of each per-step latent registered with `time_series` |
 
 `mu` / `mu_future` carry the full draw-level samples of the latent passed to
 {func}`pymc_forecast.predict` — before observation noise, so they separate
 parameter and latent uncertainty from observation-level noise (e.g. for
-causal-impact expectations or plotting the expected trajectory against the
-predictive draws). For GLM-style models this is the linear predictor, not the
-distribution mean. The names are reserved: a model body must not define its
-own `mu` or `mu_future` variable. Models that register observations without
+plotting the expected trajectory against the predictive draws). For GLM-style
+models this is the linear predictor, not the distribution mean — under a
+non-identity link `mu` is on the link scale, so consumers that need outcome
+units (causal-impact expectations, for instance) should read
+`expected_observation` / `expected_observation_future` instead, and use `mu`
+only for identity-link models. The names are reserved: a model body must not
+define its own `mu` or `mu_future` variable. Models that register observations without
 `predict` ({func}`pymc_forecast.predict_mvn`, the statespace adapter) do not
 expose them.
+
+`expected_observation` / `expected_observation_future` are opt-in outputs:
+model authors supply `expected_observation=` to
+{func}`pymc_forecast.predict` explicitly. They represent
+`E[Y | parameters, latent state, covariates]` in observed outcome units and
+exclude observation-level sampling noise. For example, a Poisson log-link
+model passes `latent=eta` and `expected_observation=exp(eta)`, retaining `eta`
+as `mu` / `mu_future` while exposing expected counts separately. The library
+does not infer inverse links or distribution means from the observation
+factory. These names are reserved just like `mu` / `mu_future` — a model body
+must not define its own `expected_observation` or `expected_observation_future`
+variable, whether or not it passes `expected_observation=`. Models that omit
+the argument retain the previous output schema.
 
 The statespace adapter additionally exposes the latent state trajectories as
 `forecast_latent` in its `predictions` group.
@@ -82,8 +100,12 @@ post = fc.forecast(future_covariates=future_cov, posterior=posterior)
 # draw i in `pre` and `post` now share parameters; chain/draw sizes match
 ```
 
-With `posterior=` given, the `chain`/`draw` sizes of every result equal the
-posterior's, and `num_samples` must not be passed.
+With `posterior=` given, the `chain`/`draw` sizes and coordinates of every
+result equal the posterior's, and `num_samples` must not be passed. This
+includes the optional expected-observation outputs, so each expected
+observation and latent predictor at draw *i* use the same parameter draw.
+The same coordinates are retained when `batch_size=` splits predictive
+sampling into blocks.
 
 ## Mapping onto downstream coordinates
 

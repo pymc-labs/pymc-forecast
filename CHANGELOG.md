@@ -8,6 +8,22 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- Schema addition — conditional expected observation: models can pass
+  `expected_observation=` to `predict(...)` to emit `expected_observation` /
+  `expected_observation_future` (exported as
+  `pymc_forecast.EXPECTED_OBSERVATION_VAR` /
+  `EXPECTED_OBSERVATION_FORECAST_VAR`) alongside the existing `mu` /
+  `mu_future`. These carry `E[Y | parameters, latent state, covariates]` in
+  observed outcome units, so GLM-style models can expose outcome-scale
+  expectations while `mu` stays the link-scale latent predictor. Both new
+  names are reserved unconditionally: a model body that defines its own
+  variable under either name now raises `HorizonError`, whether or not it uses
+  the new argument ([#52](https://github.com/pymc-labs/pymc-forecast/issues/52)).
+- Preserve supplied posterior draw coordinates when `batch_size=` splits
+  predictive sampling into blocks, including the expected-observation outputs.
+  Unlabeled posterior datasets receive continuous default draw indices.
+- Broadcast recorded predictors over the full panel before splitting the
+  horizon, avoiding a PyTensor 3.3 shape error for singleton panel axes.
 - Validate non-time dimensions and coordinates on every forecast covariate
   input path and shared panel dimensions during model construction. Reordered
   or renamed features now raise before posterior sampling instead of silently
