@@ -8,6 +8,12 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- Add `ssoe` and `SSOEResult` for observation-driven recursions with named inputs,
+  shared training/forecast updates, and fresh future errors under posterior replay.
+- Add executed ARMA, intermittent-demand and inference-comparison notebooks;
+  refactor Holt-Winters to use `ssoe`, expose conditional future means, and
+  center initial seasonality to distinguish it from the initial level.
+
 - Schema addition — conditional expected observation: models can pass
   `expected_observation=` to `predict(...)` to emit `expected_observation` /
   `expected_observation_future` (exported as

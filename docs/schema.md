@@ -41,9 +41,10 @@ non-identity link `mu` is on the link scale, so consumers that need outcome
 units (causal-impact expectations, for instance) should read
 `expected_observation` / `expected_observation_future` instead, and use `mu`
 only for identity-link models. The names are reserved: a model body must not
-define its own `mu` or `mu_future` variable. Models that register observations without
-`predict` ({func}`pymc_forecast.predict_mvn`, the statespace adapter) do not
-expose them.
+define its own `mu` or `mu_future` variable when calling `predict`. Models that
+register observations directly can explicitly register these Deterministics,
+as in the {func}`pymc_forecast.ssoe` examples. The `predict_mvn` helper and
+statespace adapter do not currently expose them.
 
 `expected_observation` / `expected_observation_future` are opt-in outputs:
 model authors supply `expected_observation=` to
@@ -116,3 +117,14 @@ one-liner, e.g.:
 samples = pymc_forecast.prediction_samples(result)["forecast"]
 samples = samples.rename({"time_future": "obs_ind", "series": "treated_units"})
 ```
+
+## Observation-driven recursion outputs
+
+The `ssoe` helper registers only its future error variable. Example models
+register `obs`, `mu`, `mu_future` and `forecast` explicitly using the same schema.
+`forecast` already includes observation noise; adding a further likelihood draw
+would count it twice. `mu_future` excludes the current observation error, but
+previous simulated future errors can still influence its state. It represents
+a conditional one-step mean, not an unconditional multi-step expectation.
+In-sample `mu` and posterior predictive observations condition on the actual
+training history; they are not simulations of a new training trajectory.
