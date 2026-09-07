@@ -49,6 +49,28 @@ results = backtest(
 )
 ```
 
+For a non-identity link, keep the link-scale latent and provide the
+outcome-scale expectation explicitly:
+
+```python
+eta = intercept + pt.dot(covariates, beta)
+predict(
+    h,
+    # the factory receives the *windowed* latent, so it applies the inverse
+    # link itself — it cannot reuse the full-horizon `pt.exp(eta)` below
+    lambda name, eta_window, dims, obs: pm.Poisson(
+        name, pt.exp(eta_window), dims=dims, observed=obs
+    ),
+    eta,
+    expected_observation=pt.exp(eta),
+)
+```
+
+Predictions then include `mu` / `mu_future` (the supplied `eta`) and
+`expected_observation` / `expected_observation_future` (expected counts);
+all retain the same chain, draw, and time coordinates. See the
+[prediction output schema](schema.md) for the full contract.
+
 ## Check VI convergence
 
 {class}`~pymc_forecast.Forecaster` uses mean-field ADVI, which can

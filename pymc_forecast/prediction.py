@@ -23,7 +23,15 @@ import xarray as xr
 
 from pymc_forecast.data import DRAW_DIM, TIME_DIM, as_dataarray, null_covariates
 from pymc_forecast.exceptions import HorizonError
-from pymc_forecast.model import FORECAST_VAR, MU_FORECAST_VAR, MU_VAR, OBS_VAR, build_model
+from pymc_forecast.model import (
+    EXPECTED_OBSERVATION_FORECAST_VAR,
+    EXPECTED_OBSERVATION_VAR,
+    FORECAST_VAR,
+    MU_FORECAST_VAR,
+    MU_VAR,
+    OBS_VAR,
+    build_model,
+)
 
 __all__ = [
     "forecast",
@@ -145,13 +153,12 @@ def _group_datasets(result) -> dict[str, xr.Dataset]:
 
 
 def _concat_draw_chunks(chunks: list):
-    """Reassemble chunked predictive results into one draw-contiguous result.
+    """Reassemble chunked predictive results in posterior draw order.
 
-    Groups carrying a ``draw`` dim are concatenated with renumbered,
-    contiguous draw coords; draw-free groups (constant data, observed data)
-    are taken from the first chunk — they are identical across chunks by
-    construction. The result has the same type and group structure as a
-    single-pass call.
+    Groups carrying a ``draw`` dim retain the posterior's draw coordinates;
+    draw-free groups (constant data, observed data) are taken from the first
+    chunk — they are identical across chunks by construction. The result has
+    the same type and group structure as a single-pass call.
     """
     template = chunks[0]
     chunk_groups = [_group_datasets(chunk) for chunk in chunks]
@@ -160,14 +167,7 @@ def _concat_draw_chunks(chunks: list):
         if DRAW_DIM not in first.dims:
             groups[name] = first
             continue
-        parts = []
-        offset = 0
-        for chunk in chunk_groups:
-            ds = chunk[name]
-            draws = np.arange(offset, offset + ds.sizes[DRAW_DIM])
-            parts.append(ds.assign_coords({DRAW_DIM: draws}))
-            offset += ds.sizes[DRAW_DIM]
-        groups[name] = xr.concat(parts, dim=DRAW_DIM)
+        groups[name] = xr.concat([chunk[name] for chunk in chunk_groups], dim=DRAW_DIM)
     if hasattr(template, "children"):
         tree = xr.DataTree.from_dict(groups)
         tree.attrs.update(template.attrs)
@@ -204,6 +204,10 @@ def _sample_predictive(
     num_draws = posterior_ds.sizes[DRAW_DIM]
     if batch_size is None or num_draws <= batch_size:
         return pm.sample_posterior_predictive(posterior_ds, random_seed=random_seed, **kwargs)
+    # Materialize implicit draw indices before slicing, otherwise PyMC starts
+    # a new zero-based index in each batch of an unlabeled posterior Dataset.
+    if DRAW_DIM not in posterior_ds.coords:
+        posterior_ds = posterior_ds.assign_coords({DRAW_DIM: np.arange(num_draws)})
     starts = range(0, num_draws, batch_size)
     seeds = _chunk_seeds(random_seed, len(starts))
     chunks = [
@@ -219,14 +223,14 @@ def _sample_predictive(
 
 def _default_var_names(model: pm.Model) -> list[str]:
     """The forecast variable, every ``*_future`` latent, and the noise-free
-    ``mu_future`` predictor (a Deterministic, so collected explicitly), for
-    the output."""
+    predictors registered as Deterministics, for the output."""
     names = [FORECAST_VAR]
     names += [
         rv.name for rv in model.free_RVs if rv.name.endswith("_future") and rv.name != FORECAST_VAR
     ]
-    if MU_FORECAST_VAR in model.named_vars:
-        names.append(MU_FORECAST_VAR)
+    for name in (MU_FORECAST_VAR, EXPECTED_OBSERVATION_FORECAST_VAR):
+        if name in model.named_vars and name not in names:
+            names.append(name)
     return names
 
 
@@ -266,8 +270,9 @@ def forecast(
         Variables to record. Default: ``"forecast"``, all ``*_future``
         latents, and — for models registered through
         :func:`~pymc_forecast.model.predict` — the noise-free ``"mu_future"``
-        predictor. On very wide panels, restricting this to
-        ``["forecast"]`` also shrinks the result's memory footprint.
+        predictor plus ``"expected_observation_future"`` when supplied by the
+        model. On very wide panels, restricting this to ``["forecast"]`` also
+        shrinks the result's memory footprint.
     batch_size
         Maximum posterior draws (per chain) per predictive pass. When set,
         the posterior is processed in consecutive blocks of at most this many
@@ -324,7 +329,8 @@ def predict_in_sample(
     the observed window only (no forecast horizon) and the observed variable
     is resampled given replayed latents. For models registered through
     :func:`~pymc_forecast.model.predict`, the noise-free ``"mu"`` predictor
-    is recorded alongside ``"obs"``.
+    is recorded alongside ``"obs"``; ``"expected_observation"`` is also
+    recorded when supplied by the model.
 
     Parameters
     ----------
@@ -353,6 +359,8 @@ def predict_in_sample(
     var_names = [OBS_VAR]
     if MU_VAR in model.named_vars:
         var_names.append(MU_VAR)
+    if EXPECTED_OBSERVATION_VAR in model.named_vars:
+        var_names.append(EXPECTED_OBSERVATION_VAR)
     return _sample_predictive(
         posterior_dataset(posterior),
         model,

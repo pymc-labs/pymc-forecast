@@ -73,8 +73,16 @@ class TestBuildModel:
         data, cov = make_trend_data()
         model = build_model(linear_model, data, cov)
         assert {"mu", "mu_future"} <= set(model.named_vars)
+        assert "expected_observation" not in model.named_vars
         train = build_model(linear_model, data, cov.isel({TIME_DIM: slice(None, 30)}))
         assert "mu" in train.named_vars and "mu_future" not in train.named_vars
+
+    def test_registers_optional_expected_observation(self):
+        data, cov = make_random_walk_data()
+        model = build_model(random_walk_model, data, cov)
+        assert {"expected_observation", "expected_observation_future"} <= set(model.named_vars)
+        assert model.named_vars["expected_observation"].eval().shape == (40,)
+        assert model.named_vars["expected_observation_future"].eval().shape == (5,)
 
     def test_mu_full_shape_for_batch_dims(self):
         rng = np.random.default_rng(0)
@@ -111,7 +119,30 @@ class TestBuildModel:
             linear_model(h, covariates)
 
         data, cov = make_trend_data()
-        with pytest.raises(HorizonError, match="reserves 'mu'"):
+        with pytest.raises(HorizonError, match=r"already defines \['mu'\]"):
+            build_model(colliding, data, cov)
+
+    @pytest.mark.parametrize("name", ["expected_observation", "expected_observation_future"])
+    def test_reserved_expected_observation_name_collides_without_the_argument(self, name):
+        # the names are reserved unconditionally: a model that never passes
+        # expected_observation= must still not be able to define them, or the
+        # user variable would be swept into the documented schema slot by
+        # _default_var_names / predict_in_sample, which collect by name
+        def colliding(h, covariates):
+            pm.Normal(name, 0.0, 1.0)
+            linear_model(h, covariates)
+
+        data, cov = make_trend_data()
+        with pytest.raises(HorizonError, match=rf"already defines \['{name}'\]"):
+            build_model(colliding, data, cov)
+
+    def test_reserved_expected_observation_name_collides_with_the_argument(self):
+        def colliding(h, covariates):
+            pm.Normal("expected_observation", 0.0, 1.0)
+            random_walk_model(h, covariates)
+
+        data, cov = make_random_walk_data()
+        with pytest.raises(HorizonError, match=r"already defines \['expected_observation'\]"):
             build_model(colliding, data, cov)
 
     def test_prior_only_build(self):
@@ -129,6 +160,7 @@ class TestForecastingModelFacade:
         oop = build_model(RandomWalkForecastingModel(), data, cov)
         fn = build_model(random_walk_model, data, cov)
         assert {rv.name for rv in oop.free_RVs} == {rv.name for rv in fn.free_RVs}
+        assert {"expected_observation", "expected_observation_future"} <= set(oop.named_vars)
 
     def test_horizon_unavailable_outside_build(self):
         instance = RandomWalkForecastingModel()

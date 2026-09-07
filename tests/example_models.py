@@ -34,6 +34,7 @@ def random_walk_model(h: Horizon, covariates: xr.DataArray) -> None:
         h,
         lambda name, m, dims, observed: pm.Normal(name, m, sigma, dims=dims, observed=observed),
         level,
+        expected_observation=level,
     )
 
 
@@ -46,9 +47,11 @@ class RandomWalkForecastingModel(ForecastingModel):
             "drift", lambda name, dims: pm.Normal(name, drift_loc, 0.1, dims=dims)
         )
         sigma = pm.HalfNormal("sigma", 0.5)
+        level = pt.cumsum(drift)
         self.predict(
             lambda name, m, dims, observed: pm.Normal(name, m, sigma, dims=dims, observed=observed),
-            pt.cumsum(drift),
+            level,
+            expected_observation=level,
         )
 
 
@@ -74,6 +77,7 @@ def poisson_model(h: Horizon, covariates: xr.DataArray) -> None:
         h,
         lambda name, e, dims, observed: pm.Poisson(name, pt.exp(e), dims=dims, observed=observed),
         eta,
+        expected_observation=pt.exp(eta),
     )
 
 

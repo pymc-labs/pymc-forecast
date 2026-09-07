@@ -15,7 +15,7 @@ derived from the *coords*: ``future = len(covariates.time) - len(data.time)``.
 """
 
 import abc
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -38,6 +38,8 @@ from pymc_forecast.priors import (
 )
 
 __all__ = [
+    "EXPECTED_OBSERVATION_FORECAST_VAR",
+    "EXPECTED_OBSERVATION_VAR",
     "FORECAST_VAR",
     "MU_FORECAST_VAR",
     "MU_VAR",
@@ -54,6 +56,14 @@ OBS_VAR = "obs"
 
 FORECAST_VAR = "forecast"
 """Reserved name of the forecast-horizon variable registered by :func:`predict`."""
+
+EXPECTED_OBSERVATION_VAR = "expected_observation"
+"""Reserved name of the in-sample conditional expected observation registered
+by :func:`predict`, in observed outcome units and excluding observation noise."""
+
+EXPECTED_OBSERVATION_FORECAST_VAR = "expected_observation_future"
+"""Reserved name of the forecast-horizon conditional expected observation
+registered by :func:`predict` (see :data:`EXPECTED_OBSERVATION_VAR`)."""
 
 MU_VAR = "mu"
 """Reserved name of the in-sample noise-free latent predictor registered by
@@ -171,15 +181,12 @@ def time_series(
     return pt.concatenate([prefix, suffix], axis=0)
 
 
-def _register_mu(model: pm.Model, name: str, latent_slice, dims: tuple[str, ...]) -> None:
-    """Record a slice of the latent predictor as a named Deterministic.
-
-    The latent is broadcast to the variable's full shape so it mirrors the
-    observation variable even when the model body relies on broadcasting
-    (the likelihood broadcasts the latent the same way).
-    """
-    shape = [model.dim_lengths[d] for d in dims]
-    pm.Deterministic(name, pt.broadcast_to(latent_slice, shape), dims=dims)
+def _join_names(names: Sequence[str]) -> str:
+    """Render names as a comma-separated list with a final "and"."""
+    quoted = [repr(name) for name in names]
+    if len(quoted) < 3:
+        return " and ".join(quoted)
+    return f"{', '.join(quoted[:-1])} and {quoted[-1]}"
 
 
 def predict(
@@ -187,6 +194,7 @@ def predict(
     obs_fn: ObsFactory,
     latent: pt.TensorVariable,
     *,
+    expected_observation: pt.TensorVariable | None = None,
     dims: tuple[str, ...] | None = None,
 ) -> None:
     """Register the observation and forecast variables of the model.
@@ -204,6 +212,13 @@ def predict(
     passed to ``predict``, not the distribution mean. The names ``"mu"`` and
     ``"mu_future"`` are therefore reserved: a model body must not define
     variables with these names.
+
+    Model authors may additionally pass ``expected_observation`` to record the
+    conditional expected observation in observed outcome units, excluding
+    observation noise. It is emitted as ``"expected_observation"`` and
+    ``"expected_observation_future"`` without changing the meaning of
+    ``"mu"`` / ``"mu_future"``. This value is explicit because ``predict``
+    does not infer inverse links or distribution means from ``obs_fn``.
 
     This single primitive covers both upstream ``predict`` (location-family
     noise: pass ``lambda name, mu, dims, observed: pm.Normal(name, mu, sigma,
@@ -226,6 +241,11 @@ def predict(
         the observed and forecast segments (see :mod:`pymc_forecast.priors`).
     latent
         Full-horizon predictor with time on axis 0.
+    expected_observation
+        Optional full-horizon conditional expected observation in observed
+        outcome units, with time on axis 0. For a Poisson log-link model whose
+        ``latent`` is ``eta``, pass ``pt.exp(eta)``. Its generated variable
+        names are reserved whether or not this argument is provided.
     dims
         Extra (non-time) dims of the observation. Default: inferred from the
         data's non-time dims (``()`` for prior-only builds).
@@ -236,19 +256,45 @@ def predict(
         dims = () if h.data is None else tuple(d for d in h.data.dims if d != TIME_DIM)
     observed = None if h.data is None else h.data.transpose(TIME_DIM, ...).values
     model = pm.modelcontext(None)
-    taken = {MU_VAR, MU_FORECAST_VAR}.intersection(model.named_vars)
+    reserved = {
+        MU_VAR,
+        MU_FORECAST_VAR,
+        EXPECTED_OBSERVATION_VAR,
+        EXPECTED_OBSERVATION_FORECAST_VAR,
+    }
+    taken = reserved.intersection(model.named_vars)
     if taken:
         msg = (
             f"the model already defines {sorted(taken)}; predict() reserves "
-            f"'{MU_VAR}' and '{MU_FORECAST_VAR}' for the noise-free latent "
-            "predictor — rename the model variable"
+            f"{_join_names(sorted(reserved))} for "
+            "generated predictive outputs — rename the model variable"
         )
         raise HorizonError(msg)
+    # Broadcast the recorded predictors over the full panel before slicing.
+    # Broadcasting an already-sliced singleton panel axis can be rewritten
+    # incorrectly by PyTensor 3.3, producing a shape error for mu_future.
+    shape = (h.duration, *(model.dim_lengths[d] for d in dims))
+    latent_output = pt.broadcast_to(latent, shape)
+    expected_output = (
+        None if expected_observation is None else pt.broadcast_to(expected_observation, shape)
+    )
     obs_fn(OBS_VAR, latent[: h.t_obs], (TIME_DIM, *dims), observed)
-    _register_mu(model, MU_VAR, latent[: h.t_obs], (TIME_DIM, *dims))
+    pm.Deterministic(MU_VAR, latent_output[: h.t_obs], dims=(TIME_DIM, *dims))
+    if expected_output is not None:
+        pm.Deterministic(
+            EXPECTED_OBSERVATION_VAR,
+            expected_output[: h.t_obs],
+            dims=(TIME_DIM, *dims),
+        )
     if h.future > 0:
         obs_fn(FORECAST_VAR, latent[h.t_obs :], (FUTURE_DIM, *dims), None)
-        _register_mu(model, MU_FORECAST_VAR, latent[h.t_obs :], (FUTURE_DIM, *dims))
+        pm.Deterministic(MU_FORECAST_VAR, latent_output[h.t_obs :], dims=(FUTURE_DIM, *dims))
+        if expected_output is not None:
+            pm.Deterministic(
+                EXPECTED_OBSERVATION_FORECAST_VAR,
+                expected_output[h.t_obs :],
+                dims=(FUTURE_DIM, *dims),
+            )
 
 
 ModelFunction = Callable[[Horizon, xr.DataArray], None]
@@ -307,10 +353,17 @@ class ForecastingModel(PriorConfig, abc.ABC):
         obs_fn: ObsFactory,
         latent: pt.TensorVariable,
         *,
+        expected_observation: pt.TensorVariable | None = None,
         dims: tuple[str, ...] | None = None,
     ) -> None:
         """Bound :func:`predict` using the current build's horizon."""
-        predict(self._require_horizon(), obs_fn, latent, dims=dims)
+        predict(
+            self._require_horizon(),
+            obs_fn,
+            latent,
+            expected_observation=expected_observation,
+            dims=dims,
+        )
 
     def __call__(self, h: Horizon, covariates: xr.DataArray) -> None:
         """Run the model body with the horizon bound (used by :func:`build_model`)."""
