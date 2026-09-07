@@ -71,12 +71,22 @@ jobs:
             "${GITHUB_WORKSPACE}/tests/test_ssoe.py"
 
   notebooks:
+    name: notebooks (${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # Python 3.11 resolves older PyMC/pymc-extras APIs than Python 3.12.
-        python-version: ["3.11", "3.12"]
+        include:
+          # Also test the recursion examples with the older dependency APIs.
+          - python-version: "3.11"
+            notebooks: >-
+              docs/examples/arma.ipynb
+              docs/examples/exponential_smoothing_state_space.ipynb
+              docs/examples/inference_methods_comparison.ipynb
+              docs/examples/intermittent_demand.ipynb
+          # The full gallery includes examples using ArviZ 1.x plotting APIs.
+          - python-version: "3.12"
+            notebooks: docs/examples/*.ipynb
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -90,8 +100,9 @@ jobs:
       - name: Execute example notebooks (reduced settings)
         env:
           PYMC_FORECAST_SMOKE_TEST: "1"
+          NOTEBOOKS: ${{ matrix.notebooks }}
         run: |
-          for nb in docs/examples/*.ipynb; do
+          for nb in $NOTEBOOKS; do
             echo "::group::$nb"
             uv run jupyter nbconvert --to notebook --execute --output-dir "${RUNNER_TEMP}/executed" "$nb"
             echo "::endgroup::"
