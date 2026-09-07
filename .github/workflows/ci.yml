@@ -72,9 +72,16 @@ jobs:
 
   notebooks:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Python 3.11 resolves older PyMC/pymc-extras APIs than Python 3.12.
+        python-version: ["3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
       - uses: actions/cache@v4
         with:
           path: ~/.cache/pymc_forecast
