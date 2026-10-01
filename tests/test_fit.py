@@ -6,10 +6,10 @@ import pytensor.tensor as pt
 import pytest
 import xarray as xr
 
-from pymc_forecast.exceptions import MethodResolutionError, OptionalDependencyError
+from pymc_forecast.exceptions import HorizonError, MethodResolutionError, OptionalDependencyError
 from pymc_forecast.fit import draw_posterior, fit_mcmc, fit_vi
 from pymc_forecast.forecaster import Forecaster, HMCForecaster
-from pymc_forecast.model import Horizon, innovations, predict
+from pymc_forecast.model import Horizon, build_model, innovations, predict
 
 
 def local_level(covariates, data=None):
@@ -132,3 +132,20 @@ def test_fitters_drop_covariate_rows_past_the_training_window(fit):
     assert "drift" in posterior.data_vars
     assert "drift_future" not in posterior.data_vars
     assert "forecast" not in posterior.data_vars
+
+
+@pytest.mark.parametrize(
+    "fit",
+    [
+        lambda model: fit_vi(local_level, model=model, num_steps=5, random_seed=0),
+        lambda model: fit_mcmc(local_level, model=model, draws=5, tune=5, chains=1, random_seed=0),
+    ],
+    ids=["vi", "mcmc"],
+)
+def test_fitters_reject_a_supplied_model_with_forecast_horizon_latents(fit):
+    """A prebuilt horizon model would put future latents into the posterior."""
+    data, _ = _series(n=6)
+    full = xr.DataArray(np.zeros((9, 0)), dims=("time", "covariate"), coords={"time": np.arange(9)})
+    prebuilt = build_model(local_level, data, full)
+    with pytest.raises(HorizonError, match="drift_future"):
+        fit(prebuilt)

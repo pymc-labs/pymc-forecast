@@ -1,8 +1,13 @@
 """Functional fitters: one sampling path shared with the forecaster classes.
 
-Each fitter accepts an already-built ``model=``. When it is omitted, the
-fitter calls :func:`~pymc_forecast.model.build_model` once and samples that
-model. Class ``_fit`` methods pass ``model=self.model`` and do not build again.
+Each fitter accepts an already-built ``model=``, which must be a
+training-window model: a model with forecast-horizon variables (``forecast``
+or ``{name}_future`` free variables) is rejected with
+:class:`~pymc_forecast.exceptions.HorizonError`. When ``model`` is omitted,
+the fitter drops covariate rows past the training window, calls
+:func:`~pymc_forecast.model.build_model` once, and samples that model; only
+the ``model_fn, data, covariates`` path performs that trim.
+Class ``_fit`` methods pass ``model=self.model`` and do not build again.
 """
 
 from __future__ import annotations
@@ -17,8 +22,8 @@ import pymc as pm
 import xarray as xr
 
 from pymc_forecast.data import TIME_DIM, as_dataarray, null_covariates
-from pymc_forecast.exceptions import MethodResolutionError, OptionalDependencyError
-from pymc_forecast.model import build_model
+from pymc_forecast.exceptions import HorizonError, MethodResolutionError, OptionalDependencyError
+from pymc_forecast.model import FORECAST_VAR, build_model
 from pymc_forecast.prediction import posterior_dataset, thin_draws
 
 __all__ = ["FitResult", "draw_posterior", "fit_mcmc", "fit_pathfinder", "fit_vi"]
@@ -110,8 +115,11 @@ def _check_vi_convergence(losses, num_steps: int) -> None:
 class FitResult:
     """A completed fit.
 
-    Variational results carry ``approx`` and ``losses`` and leave ``idata``
-    as ``None`` until something draws. MCMC and Pathfinder set ``idata``.
+    Variational results carry ``approx`` and ``losses`` and keep
+    ``idata=None``; the result is frozen and never filled in.
+    ``draw_posterior(result, n)`` returns the posterior ``Dataset``, which is
+    what to pass to ``forecast`` (not ``result.idata``). MCMC and Pathfinder
+    set ``idata``.
     ``method`` is ``"mcmc"``, ``"pathfinder"``, or the VI method passed to
     :func:`fit_vi` (a name or an inference object).
     """
@@ -137,8 +145,25 @@ def _training_inputs(data, covariates) -> tuple[xr.DataArray, xr.DataArray]:
 
 
 def _training_model(model, model_fn, data, covariates):
-    """Return ``model`` unchanged, or build it once from the training inputs."""
+    """Return a validated ``model``, or build it once from the training inputs.
+
+    A supplied model is not trimmed, so one built on full-horizon covariates
+    is rejected: its future latents would be fit and then replayed.
+    """
     if model is not None:
+        horizon = [
+            rv.name
+            for rv in model.free_RVs
+            if rv.name == FORECAST_VAR or rv.name.endswith("_future")
+        ]
+        if horizon:
+            msg = (
+                f"the supplied model has forecast-horizon free variables {horizon}; "
+                "fitting would put them in the posterior. Pass a model built on the "
+                "training window only (covariates cut to the data's time steps), or "
+                "pass model_fn, data, covariates and let the fitter build it."
+            )
+            raise HorizonError(msg)
         return model
     return build_model(model_fn, *_training_inputs(data, covariates))
 

@@ -146,8 +146,8 @@ completed, and `fc.is_fitted` reports the state.
 
 The functional counterparts are {func}`~pymc_forecast.fit_vi`,
 {func}`~pymc_forecast.fit_mcmc`, and {func}`~pymc_forecast.fit_pathfinder`: each
-returns a {class}`~pymc_forecast.FitResult` (a VI result has `idata is None` until
-{func}`~pymc_forecast.draw_posterior` samples the approximation).
+returns a {class}`~pymc_forecast.FitResult` (a VI result keeps `idata=None`;
+{func}`~pymc_forecast.draw_posterior` returns the posterior to pass to `forecast`).
 
 ## Covariates and richer latents
 
