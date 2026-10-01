@@ -1,7 +1,10 @@
+import inspect
+
 import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
 import pytest
+import xarray as xr
 from example_models import (
     RandomWalkForecastingModel,
     hierarchical_model,
@@ -13,19 +16,19 @@ from example_models import (
 
 from pymc_forecast.data import TIME_DIM
 from pymc_forecast.exceptions import HorizonError
-from pymc_forecast.model import Horizon, build_model, predict, time_series
+from pymc_forecast.model import ForecastingModel, Horizon, build_model, predict, time_series
 
 
 class TestHorizon:
     def test_from_arrays_split(self):
         data, cov = make_trend_data(t_obs=30, horizon=5)
-        h = Horizon.from_arrays(cov, data)
+        h = Horizon.from_data(cov, data)
         assert (h.t_obs, h.future, h.duration) == (30, 5, 35)
         np.testing.assert_array_equal(h.time_future, np.arange(30, 35))
 
     def test_prior_only(self):
         _, cov = make_trend_data(t_obs=30, horizon=5)
-        h = Horizon.from_arrays(cov, None)
+        h = Horizon.from_data(cov, None)
         assert (h.t_obs, h.future) == (35, 0)
         assert h.data is None
 
@@ -62,7 +65,7 @@ class TestBuildModel:
         assert model.named_vars["forecast"].eval().shape == (5, 3)
 
     def test_missing_predict_raises(self):
-        def no_predict(h, covariates):
+        def no_predict(covariates, data=None):
             pm.Normal("x")
 
         data, cov = make_trend_data()
@@ -95,7 +98,8 @@ class TestBuildModel:
     def test_mu_broadcast_like_the_likelihood(self):
         # a latent with a size-1 series axis broadcasts against the data in
         # the likelihood; mu must be recorded at the same full shape
-        def broadcasting(h, covariates):
+        def broadcasting(covariates, data=None):
+            h = Horizon.from_data(covariates, data)
             drift = time_series(h, "drift", lambda name, dims: pm.Normal(name, 0.0, 0.2, dims=dims))
             sigma = pm.HalfNormal("sigma", 0.5)
             predict(
@@ -114,9 +118,9 @@ class TestBuildModel:
         assert model.named_vars["mu_future"].eval().shape == (5, 3)
 
     def test_reserved_mu_name_collides(self):
-        def colliding(h, covariates):
+        def colliding(covariates, data=None):
             pm.Normal("mu", 0.0, 1.0)
-            linear_model(h, covariates)
+            linear_model(covariates, data)
 
         data, cov = make_trend_data()
         with pytest.raises(HorizonError, match=r"already defines \['mu'\]"):
@@ -128,18 +132,18 @@ class TestBuildModel:
         # expected_observation= must still not be able to define them, or the
         # user variable would be swept into the documented schema slot by
         # _default_var_names / predict_in_sample, which collect by name
-        def colliding(h, covariates):
+        def colliding(covariates, data=None):
             pm.Normal(name, 0.0, 1.0)
-            linear_model(h, covariates)
+            linear_model(covariates, data)
 
         data, cov = make_trend_data()
         with pytest.raises(HorizonError, match=rf"already defines \['{name}'\]"):
             build_model(colliding, data, cov)
 
     def test_reserved_expected_observation_name_collides_with_the_argument(self):
-        def colliding(h, covariates):
+        def colliding(covariates, data=None):
             pm.Normal("expected_observation", 0.0, 1.0)
-            random_walk_model(h, covariates)
+            random_walk_model(covariates, data)
 
         data, cov = make_random_walk_data()
         with pytest.raises(HorizonError, match=r"already defines \['expected_observation'\]"):
@@ -166,3 +170,42 @@ class TestForecastingModelFacade:
         instance = RandomWalkForecastingModel()
         with pytest.raises(HorizonError, match="during a model build"):
             instance.time_series("drift", lambda name, dims: None)
+
+
+def test_model_function_receives_covariates_then_data():
+    seen = {}
+
+    def model(covariates, data=None):
+        h = Horizon.from_data(covariates, data)
+        seen["t"] = h.t_obs
+        seen["future"] = h.future
+        predict(
+            h,
+            lambda name, m, dims, observed: pm.Normal(name, m, 1.0, dims=dims, observed=observed),
+            pt.zeros(h.duration),
+        )
+
+    data = xr.DataArray([1.0, 2.0], dims="time", coords={"time": [0, 1]})
+    cov = xr.DataArray([0.0, 0.0, 0.0], dims="time", coords={"time": [0, 1, 2]})
+    build_model(model, data, cov)
+    assert seen == {"t": 2, "future": 1}
+
+
+def test_from_arrays_absent_and_class_reads_horizon():
+    assert not hasattr(Horizon, "from_arrays")
+    params = inspect.signature(ForecastingModel.model).parameters
+    assert list(params) == ["self", "covariates", "data"]
+    assert params["data"].default is None
+
+    seen = {}
+
+    class Probe(ForecastingModel):
+        def model(self, covariates, data=None):
+            seen["t"] = self.horizon.t_obs
+            seen["future"] = self.horizon.future
+            pm.Normal("obs", 0.0, 1.0, observed=data.values, dims="time")
+
+    data = xr.DataArray([1.0, 2.0], dims="time", coords={"time": [0, 1]})
+    cov = xr.DataArray([0.0, 0.0, 0.0], dims="time", coords={"time": [0, 1, 2]})
+    build_model(Probe(), data, cov)
+    assert seen == {"t": 2, "future": 1}

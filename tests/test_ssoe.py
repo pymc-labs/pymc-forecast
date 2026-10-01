@@ -24,7 +24,8 @@ def history(values=(1.0, 2.0, 4.0)):
     return xr.DataArray(np.asarray(values), dims="time", coords={"time": np.arange(len(values))})
 
 
-def arma(h, covariates):
+def arma(covariates, data=None):
+    h = Horizon.from_data(covariates, data)
     phi = pm.Normal("phi", 0, 0.5)
     theta = pm.Normal("theta", 0, 0.5)
     sigma = pm.HalfNormal("sigma", 1)
@@ -105,7 +106,8 @@ def test_future_inputs_and_permuted_panel_dims():
         coords={"series": ["a", "b"], "time": [0, 1, 2, 3]},
     )
 
-    def model_fn(h, cov):
+    def model_fn(covariates, data=None):
+        h = Horizon.from_data(covariates, data)
         r = ssoe(
             h,
             "eps",

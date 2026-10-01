@@ -11,8 +11,9 @@ from pymc_forecast.statespace import StatespaceModel
 SEED = 20260709
 
 
-def linear_model(h: Horizon, covariates: xr.DataArray) -> None:
+def linear_model(covariates: xr.DataArray, data=None) -> None:
     """Static regression: intercept + covariates @ beta, Normal noise."""
+    h = Horizon.from_data(covariates, data)
     intercept = pm.Normal("intercept", 0.0, 2.0)
     beta = pm.Normal("beta", 0.0, 1.0, dims="covariate")
     sigma = pm.HalfNormal("sigma", 1.0)
@@ -24,8 +25,9 @@ def linear_model(h: Horizon, covariates: xr.DataArray) -> None:
     )
 
 
-def random_walk_model(h: Horizon, covariates: xr.DataArray) -> None:
+def random_walk_model(covariates: xr.DataArray, data=None) -> None:
     """Level = cumsum of per-step drift latents; the replay workhorse."""
+    h = Horizon.from_data(covariates, data)
     drift_loc = pm.Normal("drift_loc", 0.0, 1.0)
     drift = time_series(h, "drift", lambda name, dims: pm.Normal(name, drift_loc, 0.1, dims=dims))
     level = pt.cumsum(drift)
@@ -41,7 +43,7 @@ def random_walk_model(h: Horizon, covariates: xr.DataArray) -> None:
 class RandomWalkForecastingModel(ForecastingModel):
     """OOP facade version of :func:`random_walk_model`."""
 
-    def model(self, h: Horizon, covariates: xr.DataArray) -> None:
+    def model(self, covariates, data=None) -> None:
         drift_loc = pm.Normal("drift_loc", 0.0, 1.0)
         drift = self.time_series(
             "drift", lambda name, dims: pm.Normal(name, drift_loc, 0.1, dims=dims)
@@ -55,8 +57,9 @@ class RandomWalkForecastingModel(ForecastingModel):
         )
 
 
-def hierarchical_model(h: Horizon, covariates: xr.DataArray) -> None:
+def hierarchical_model(covariates: xr.DataArray, data=None) -> None:
     """Per-series intercept + shared per-step drift; data dims (time, series)."""
+    h = Horizon.from_data(covariates, data)
     intercept = pm.Normal("intercept", 0.0, 2.0, dims="series")
     drift = time_series(h, "drift", lambda name, dims: pm.Normal(name, 0.0, 0.2, dims=dims))
     mu = intercept + pt.cumsum(drift)[:, None]
@@ -68,8 +71,9 @@ def hierarchical_model(h: Horizon, covariates: xr.DataArray) -> None:
     )
 
 
-def poisson_model(h: Horizon, covariates: xr.DataArray) -> None:
+def poisson_model(covariates: xr.DataArray, data=None) -> None:
     """GLM-style count model: log-link on intercept + covariate effect."""
+    h = Horizon.from_data(covariates, data)
     intercept = pm.Normal("intercept", 0.0, 1.0)
     beta = pm.Normal("beta", 0.0, 1.0, dims="covariate")
     eta = intercept + pt.dot(covariates.values, beta)

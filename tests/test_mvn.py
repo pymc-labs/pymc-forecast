@@ -7,7 +7,7 @@ import xarray as xr
 
 from pymc_forecast.exceptions import HorizonError
 from pymc_forecast.gaussian import conditional_mvn, predict_mvn
-from pymc_forecast.model import build_model
+from pymc_forecast.model import Horizon, build_model
 
 T_OBS = 12
 HORIZON = 4
@@ -58,7 +58,8 @@ class TestConditionalMvn:
 
 
 def mvn_model_factory(loc, cov):
-    def model_fn(h, covariates):
+    def model_fn(covariates, data=None):
+        h = Horizon.from_data(covariates, data)
         predict_mvn(h, loc, cov)
 
     return model_fn

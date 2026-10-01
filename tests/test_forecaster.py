@@ -22,13 +22,14 @@ from pymc_forecast.forecaster import (
     PathfinderForecaster,
     _check_vi_convergence,
 )
-from pymc_forecast.model import predict
+from pymc_forecast.model import Horizon, predict
 
 SEED = 4242
 
 
-def deterministic_replay_model(h, covariates):
+def deterministic_replay_model(covariates, data=None):
     """Expose one posterior scalar across every time step without noise."""
+    h = Horizon.from_data(covariates, data)
     value = pm.Normal("value")
     latent = pt.repeat(value, h.duration)
     predict(
@@ -111,7 +112,8 @@ class TestJAXForecasterVI:
     def test_conjugate_normal_posterior(self):
         pytest.importorskip("jax")
 
-        def model(h, covariates):
+        def model(covariates, data=None):
+            h = Horizon.from_data(covariates, data)
             theta = pm.Normal("theta", 0.0, 1.0)
             predict(
                 h,

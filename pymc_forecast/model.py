@@ -9,7 +9,7 @@ are absent from the fitted posterior, so ``pm.sample_posterior_predictive``
 replays the posterior in-sample and draws the future from the prior —
 conditioned on the replayed parents (see ``tests/test_replay_mechanism.py``).
 
-A model is a callable ``(Horizon, covariates) -> None`` executed inside a
+A model is a callable ``(covariates, data) -> None`` executed inside a
 managed ``pm.Model`` whose coords carry real time coordinates. The horizon is
 derived from the *coords*: ``future = len(covariates.time) - len(data.time)``.
 """
@@ -121,7 +121,7 @@ class Horizon:
         return self.t_obs + self.future
 
     @classmethod
-    def from_arrays(cls, covariates: xr.DataArray, data: xr.DataArray | None) -> "Horizon":
+    def from_data(cls, covariates: xr.DataArray, data: xr.DataArray | None) -> "Horizon":
         """Derive the horizon from normalized data/covariate time coords.
 
         ``covariates`` span the full horizon; ``data`` (if given) covers the
@@ -297,8 +297,8 @@ def predict(
             )
 
 
-ModelFunction = Callable[[Horizon, xr.DataArray], None]
-"""A model body: ``(Horizon, covariates) -> None``, called inside a ``pm.Model``."""
+ModelFunction = Callable[[xr.DataArray, xr.DataArray | None], None]
+"""A model body: ``(covariates, data) -> None``, called inside a ``pm.Model``."""
 
 
 class ForecastingModel(PriorConfig, abc.ABC):
@@ -323,7 +323,7 @@ class ForecastingModel(PriorConfig, abc.ABC):
                 "noise": Prior("Normal", sigma=Prior("HalfNormal", sigma=1)),
             }
 
-            def model(self, h, covariates):
+            def model(self, covariates, data=None):
                 drift = self.time_series("drift", self.prior_config["drift"])
                 self.predict(self.prior_config["noise"], pt.cumsum(drift))
 
@@ -333,8 +333,13 @@ class ForecastingModel(PriorConfig, abc.ABC):
     _horizon: Horizon | None = None
 
     @abc.abstractmethod
-    def model(self, h: Horizon, covariates: xr.DataArray) -> None:
+    def model(self, covariates, data=None) -> None:
         """Define the generative model; call :meth:`predict` exactly once."""
+
+    @property
+    def horizon(self) -> Horizon:
+        """The :class:`Horizon` of the model build currently in progress."""
+        return self._require_horizon()
 
     def _require_horizon(self) -> Horizon:
         if self._horizon is None:
@@ -365,11 +370,11 @@ class ForecastingModel(PriorConfig, abc.ABC):
             dims=dims,
         )
 
-    def __call__(self, h: Horizon, covariates: xr.DataArray) -> None:
+    def __call__(self, covariates, data=None) -> None:
         """Run the model body with the horizon bound (used by :func:`build_model`)."""
-        self._horizon = h
+        self._horizon = Horizon.from_data(covariates, data)
         try:
-            self.model(h, covariates)
+            self.model(covariates, data)
         finally:
             self._horizon = None
 
@@ -406,7 +411,7 @@ def build_model(
     Parameters
     ----------
     model_fn
-        The model body ``(Horizon, covariates) -> None`` or a
+        The model body ``(covariates, data) -> None`` or a
         :class:`ForecastingModel` instance.
     data
         Observed data (DataArray / Series / DataFrame / ndarray), or ``None``
@@ -419,7 +424,7 @@ def build_model(
     """
     cov_da = as_dataarray(covariates, role="covariates")
     data_da = None if data is None else as_dataarray(data, role="data")
-    h = Horizon.from_arrays(cov_da, data_da)
+    h = Horizon.from_data(cov_da, data_da)
 
     model_coords: dict[str, object] = {TIME_DIM: h.time}
     if h.future > 0:
@@ -429,7 +434,7 @@ def build_model(
         model_coords.update(coords)
 
     with pm.Model(coords=model_coords) as model:
-        model_fn(h, cov_da)
+        model_fn(cov_da, data_da)
     if OBS_VAR not in model.named_vars:
         msg = (
             f"the model registered no '{OBS_VAR}' variable; call predict() "
