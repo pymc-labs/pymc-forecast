@@ -121,14 +121,28 @@ def _observed_frame(data: xr.DataArray):
     return pd.DataFrame(values)
 
 
+_FIT_DATA_GROUPS = ("observed_data", "constant_data")
+"""Fit-result groups pymc-extras reads back to rebuild the fit coords, observed
+data, and exogenous inputs."""
+
+
 def _posterior_like(fit_result, posterior: xr.Dataset):
-    """Wrap a thinned posterior ``Dataset`` in the same container type as the
-    fit result (``DataTree`` or ``arviz.InferenceData``, depending on the
-    pymc/arviz generation), which is by construction the idata flavor the
-    installed statespace methods accept."""
+    """Wrap a thinned posterior ``Dataset`` in the fit result's container type.
+
+    The container is a ``DataTree`` or ``arviz.InferenceData``, depending on the
+    pymc/arviz generation. By construction that is the idata flavor the installed
+    statespace methods accept. The fit's data groups travel along because recent
+    pymc-extras rebuilds the fit coords, observed data, and exogenous inputs
+    from them before forecasting.
+    """
+    groups = {"posterior": posterior}
+    for name in _FIT_DATA_GROUPS:
+        if name in fit_result:
+            group = fit_result[name]
+            groups[name] = group.to_dataset() if isinstance(group, xr.DataTree) else group
     if isinstance(fit_result, xr.DataTree):
-        return xr.DataTree.from_dict({"posterior": posterior})
-    return type(fit_result)(posterior=posterior)
+        return xr.DataTree.from_dict(groups)
+    return type(fit_result)(**groups)
 
 
 def _predictive_dataset(result) -> xr.Dataset:
@@ -186,8 +200,9 @@ class StatespaceForecaster(HMCForecaster):
         accepted here for compatibility, but the direct argument is preferred
         (passing both raises).
     build_kwargs
-        Extra keyword arguments for ``build_statespace_graph``, such as
-        ``mvn_method`` for the likelihood decomposition.
+        Extra keyword arguments for ``build_statespace_graph``. Which keywords
+        exist depends on the installed pymc-extras: older releases accept
+        e.g. ``mvn_method``; 0.15.1 accepts none.
     forecast_kwargs
         Extra keyword arguments for ``PyMCStateSpace.forecast``, such as
         ``filter_output`` or ``mvn_method``. Horizon, scenario, seed,

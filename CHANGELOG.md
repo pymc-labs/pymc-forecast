@@ -8,6 +8,10 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- Fix `StatespaceForecaster.forecast` and `predict_in_sample` on current
+  pymc-extras (verified on 0.15.1): the thinned posterior now carries the
+  fit's `observed_data` and `constant_data` groups, which pymc-extras reads
+  to recover the fit coords, observed data, and exogenous inputs.
 - Add `ssoe` and `SSOEResult` for observation-driven recursions with named inputs,
   shared training/forecast updates, and fresh future errors under posterior replay.
 - Add executed ARMA, intermittent-demand and inference-comparison notebooks;

@@ -157,10 +157,9 @@ def regression_forecaster():
         data,
         cov,
         random_seed=SEED,
-        # cholesky is fine for the likelihood graph; the forecast covariance is
-        # singular (regression states carry no innovations) so it needs svd.
-        # Together these exercise the build_kwargs/forecast_kwargs passthroughs.
-        build_kwargs={"mvn_method": "cholesky"},
+        # The forecast covariance is singular (regression states carry no
+        # innovations), so it needs svd; this also exercises the
+        # forecast_kwargs passthrough.
         forecast_kwargs={"mvn_method": "svd"},
         **FAST,
     )
