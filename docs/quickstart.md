@@ -1,14 +1,14 @@
 # Quickstart
 
-One model definition serves fitting and forecasting: {func}`~pymc_forecast.time_series`
+One model definition serves fitting and forecasting: {func}`~pymc_forecast.innovations`
 creates separate `{name}_future` latents that are absent from the fitted posterior, so
 posterior predictive sampling replays the fitted parameters while drawing the horizon
-forward. Write a model with one {func}`~pymc_forecast.predict` call, fit it, and
-forecast:
+forward. Write a {class}`~pymc_forecast.ForecastingModel` with one `predict()` call,
+fit it, and forecast:
 
 ```python
 import numpy as np, pandas as pd, pymc as pm, pytensor.tensor as pt
-from pymc_forecast import Forecaster, backtest, evaluate_forecast, predict, time_series
+from pymc_forecast import Forecaster, ForecastingModel, backtest, evaluate_forecast
 
 # a trending weekly series; hold out the last 8 weeks
 dates = pd.date_range("2024-01-07", periods=60, freq="W")
@@ -16,17 +16,15 @@ y = pd.Series(np.cumsum(np.random.default_rng(0).normal(0.2, 1.0, 60)) + 10, ind
 train, test = y.iloc[:52], y.iloc[52:]
 
 
-def model(h, covariates):
-    # a per-step drift latent; time_series adds the matching `_future` latent
-    drift = time_series(h, "drift", lambda name, dims: pm.Normal(name, 0.0, 0.5, dims=dims))
-    sigma = pm.HalfNormal("sigma", 1.0)
-    predict(
-        h,
-        lambda name, mu, dims, obs: pm.Normal(name, mu, sigma, dims=dims, observed=obs),
-        pt.cumsum(drift),  # local-linear trend
-    )
+class LocalLevel(ForecastingModel):
+    def model(self, covariates, data=None):
+        # a per-step drift latent; innovations adds the matching `_future` latent
+        drift = self.innovations("drift", pm.Normal.dist(0.0, 0.5))
+        sigma = pm.HalfNormal("sigma", 1.0)
+        self.predict(pm.Normal.dist(0.0, sigma), pt.cumsum(drift))  # local-linear trend
 
 
+model = LocalLevel()
 fc = Forecaster(model, train, num_steps=5_000, random_seed=0)  # ADVI
 idata = fc.forecast(horizon=8, num_samples=500, random_seed=0)
 forecast = idata["predictions"]["forecast"]  # dims: (chain, draw, time_future)
@@ -50,17 +48,15 @@ results = backtest(
 ```
 
 For a non-identity link, keep the link-scale latent and provide the
-outcome-scale expectation explicitly:
+outcome-scale expectation explicitly. A 1-argument callable receives the
+windowed latent and returns a `.dist()`; inside `model()`:
 
 ```python
-eta = intercept + pt.dot(covariates, beta)
-predict(
-    h,
-    # the factory receives the *windowed* latent, so it applies the inverse
+eta = intercept + pt.dot(covariates.values, beta)
+self.predict(
+    # the callable receives the *windowed* latent, so it applies the inverse
     # link itself — it cannot reuse the full-horizon `pt.exp(eta)` below
-    lambda name, eta_window, dims, obs: pm.Poisson(
-        name, pt.exp(eta_window), dims=dims, observed=obs
-    ),
+    lambda eta_window: pm.Poisson.dist(pt.exp(eta_window)),
     eta,
     expected_observation=pt.exp(eta),
 )
@@ -70,6 +66,44 @@ Predictions then include `mu` / `mu_future` (the supplied `eta`) and
 `expected_observation` / `expected_observation_future` (expected counts);
 all retain the same chain, draw, and time coordinates. See the
 [prediction output schema](schema.md) for the full contract.
+
+## Functional API
+
+The same model can be written as a plain function: it builds the current
+{class}`~pymc_forecast.Horizon` itself and passes it to the module-level
+{func}`~pymc_forecast.innovations` / {func}`~pymc_forecast.predict` primitives that the
+`ForecastingModel` helpers wrap. {func}`~pymc_forecast.fit_vi` returns a
+{class}`~pymc_forecast.FitResult`; draw the posterior from it with
+{func}`~pymc_forecast.draw_posterior` and pass that to {func}`~pymc_forecast.forecast`:
+
+```python
+from pymc_forecast import (
+    Horizon,
+    draw_posterior,
+    fit_vi,
+    forecast,
+    innovations,
+    null_covariates,
+    predict,
+)
+
+
+def local_level(covariates, data=None):
+    h = Horizon.from_data(covariates, data)
+    drift = innovations(h, "drift", pm.Normal.dist(0.0, 0.5))
+    sigma = pm.HalfNormal("sigma", 1.0)
+    predict(h, pm.Normal.dist(0.0, sigma), pt.cumsum(drift))
+
+
+result = fit_vi(local_level, train, num_steps=5_000, random_seed=0)  # ADVI
+posterior = draw_posterior(result, 500, random_seed=0)
+idata = forecast(local_level, posterior, train, null_covariates(dates), random_seed=0)
+```
+
+Both forms build the same PyMC model. The forecaster classes call
+{func}`~pymc_forecast.fit_vi` / {func}`~pymc_forecast.fit_mcmc` /
+{func}`~pymc_forecast.fit_pathfinder`, and every forecaster, fitter, and
+{func}`~pymc_forecast.backtest` accepts either model form.
 
 ## Check VI convergence
 
@@ -110,12 +144,17 @@ The same object can be refit; its backend configuration is reused. Predictive
 methods raise {class}`~pymc_forecast.NotFittedError` until `fit()` has
 completed, and `fc.is_fitted` reports the state.
 
+The functional counterparts are {func}`~pymc_forecast.fit_vi`,
+{func}`~pymc_forecast.fit_mcmc`, and {func}`~pymc_forecast.fit_pathfinder`: each
+returns a {class}`~pymc_forecast.FitResult` (a VI result keeps `idata=None`;
+{func}`~pymc_forecast.draw_posterior` returns the posterior to pass to `forecast`).
+
 ## Covariates and richer latents
 
 For models with real covariates, pass full-horizon `covariates` to `.forecast()`
 instead of `horizon=` — see the
 [electricity example](examples/victoria_electricity.ipynb). See
-{func}`~pymc_forecast.markov_time_series` for state-space latents and
+{func}`~pymc_forecast.markov_series` for state-space latents and
 {func}`~pymc_forecast.predict_mvn` for observation noise correlated across time.
 
 ## Statespace models

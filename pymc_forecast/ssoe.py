@@ -17,10 +17,13 @@ import pytensor.tensor as pt
 import xarray as xr
 from pymc.pytensorf import collect_default_updates
 from pytensor.raise_op import Assert
+from pytensor.tensor.random.basic import NormalRV, StudentTRV
 
+from pymc_forecast._dist import check_unnamed_dist, expand_dist, is_dist, is_zero_constant
 from pymc_forecast.data import FUTURE_DIM, TIME_DIM
 from pymc_forecast.exceptions import AlignmentError, HorizonError
-from pymc_forecast.model import Horizon, RVFactory
+from pymc_forecast.model import Horizon
+from pymc_forecast.priors import is_prior_like, prior_rv_factory
 
 __all__ = ["SSOEResult", "ssoe"]
 
@@ -95,26 +98,112 @@ def _inputs(h: Horizon, xs: xr.DataArray | None):
     return pt.as_tensor_variable(values)
 
 
+_NOISE_PATTERN = (
+    "create sigma in the model body (sigma = pm.HalfNormal('sigma', 1)), use it "
+    "in the observation, and pass pm.Normal.dist(0, sigma) as noise"
+)
+
+
+def _accept_noise(noise) -> None:
+    """Reject noise that cannot forecast the errors the fitted model implies.
+
+    ``noise`` is a ``.dist()`` or a ``Prior``; an ``RVFactory`` is rejected.
+    A ``Prior`` must have constant parameters: a nested hyper-prior would be
+    created only on a forecasting build, so it is absent from the fitted
+    posterior and drawn from its prior. A Normal/StudentT ``Prior`` must leave
+    ``mu`` unset or zero. A ``.dist()`` must be unnamed and depend only on
+    model variables; a ``pm.Normal.dist`` / ``pm.StudentT.dist`` must have a
+    constant zero location. Other dists are not location-checked. Runs on
+    every build, so training builds fail fast too.
+    """
+    if is_prior_like(noise):
+        _accept_prior_noise(noise)
+        return
+    if not is_dist(noise):
+        raise HorizonError("ssoe noise must be a .dist() or a Prior, not an RVFactory")
+    check_unnamed_dist(noise, owner="ssoe noise")
+    op = noise.owner.op
+    params = op.dist_params(noise.owner)
+    mu = params[0] if isinstance(op, NormalRV) else params[1] if isinstance(op, StudentTRV) else 0
+    if not is_zero_constant(mu):
+        msg = (
+            "ssoe noise must be zero-centered: its location is not a constant zero. "
+            "pm.Normal.dist(sigma) binds sigma as mu; write pm.Normal.dist(0, sigma) "
+            "(or pass mu=0 to pm.StudentT.dist)"
+        )
+        raise HorizonError(msg)
+
+
+def _accept_prior_noise(noise) -> None:
+    nested = sorted(
+        key
+        for key, value in noise.parameters.items()
+        if is_prior_like(value) or (isinstance(value, pt.Variable) and value.owner is not None)
+    )
+    if nested:
+        msg = (
+            f"ssoe noise Prior has non-constant parameters {nested}: a Prior is copied "
+            "when the forecast-only error is created, so hyper-priors and model "
+            "variables in it are never tied to the fitted posterior and the forecast "
+            f"draws them from the prior; {_NOISE_PATTERN}"
+        )
+        raise HorizonError(msg)
+    mu = noise.parameters.get("mu", 0)
+    zero = (
+        is_zero_constant(mu) if isinstance(mu, pt.Variable) else bool(np.all(np.asarray(mu) == 0))
+    )
+    if noise.distribution in ("Normal", "StudentT") and not zero:
+        msg = f"ssoe noise must be zero-centered: leave the Prior's 'mu' unset or 0, got {noise}"
+        raise HorizonError(msg)
+
+
+def _future_noise(name: str, noise, dims: tuple[str, ...]) -> pt.TensorVariable:
+    """Expand ``noise`` and register ``{name}_future`` only."""
+    future_dims = (FUTURE_DIM, *dims)
+    if is_prior_like(noise):
+        return prior_rv_factory(noise, name)(f"{name}_future", future_dims)
+    model = pm.modelcontext(None)
+    try:
+        shape = tuple(model.dim_lengths[dim] for dim in future_dims)
+    except KeyError as exc:
+        msg = f"ssoe requires model coord {exc.args[0]!r}"
+        raise HorizonError(msg) from exc
+    return model.register_rv(
+        expand_dist(noise, shape, owner="ssoe"), f"{name}_future", dims=future_dims
+    )
+
+
 def ssoe(
     h: Horizon,
     name: str,
+    y: xr.DataArray | None,
     init,
     mean: Callable,
     update: Callable,
-    noise_fn: RVFactory,
-    *,
-    y: xr.DataArray | None = None,
-    params: Sequence = (),
+    noise,
     xs: xr.DataArray | None = None,
+    *,
+    params: Sequence = (),
     dims: tuple[str, ...] | None = None,
 ) -> SSOEResult:
     """Filter observed values, then simulate a recursive forecast.
+
+    ``mean(state, x, *params)`` and ``update(state, y, error, x, *params)``
+    take ``params`` because PyTensor scan cannot close over random variables.
+    ``noise`` is not scanned: it is a ``.dist()`` or a ``Prior`` registered
+    only as ``{name}_future``. Pass random coefficients in ``params``. This
+    helper does not auto-detect closed-over RVs.
 
     Parameters
     ----------
     h, name
         Model horizon and base name of the future error variable. Only
         ``f"{name}_future"`` is registered, and only when forecasting.
+    y
+        Labeled driving history. ``None`` uses ``h.data``. Must cover exactly
+        the training window. A transformed history can be supplied to compose
+        multiple recursion channels. Prior-only builds need an explicit
+        driving history; this helper does not generate an in-sample history.
     init
         Initial state: one tensor or a nonempty tuple of tensors. States may
         have different shapes (e.g. scalar level and vector seasonality).
@@ -126,25 +215,36 @@ def ssoe(
         with the same structure and shapes as ``init``. In-sample,
         ``eps_t = y_t - mu_t``; in the future, ``eps_t`` is freshly drawn and
         ``y_t = mu_t + eps_t``. Both callbacks must be deterministic.
-    noise_fn
-        ``(name, dims) -> RV`` factory for independent, zero-centered
-        per-step errors, e.g. ``lambda n, d: pm.Normal(n, 0, sigma, dims=d)``.
-        Errors may be correlated across the observation dimensions, using
-        e.g. ``pm.MvNormal``.
-    y
-        Labeled driving history, defaults to ``h.data``. Must cover exactly
-        the training window. A transformed history can be supplied to compose
-        multiple recursion channels. Prior-only builds need an explicit
-        driving history; this helper does not generate an in-sample history.
-    params
-        Tensor parameters passed explicitly to both callbacks. Pass random
-        parameters here so PyTensor can differentiate the training recursion.
+    noise
+        Unnamed ``.dist()`` or pymc-extras ``Prior`` for independent,
+        zero-centered per-step future errors, expanded and registered as
+        ``f"{name}_future"`` only. An ``RVFactory`` or other callable is
+        rejected. Parameters broadcast against ``("time_future", *dims)``, so a
+        per-series scale works. Errors may be correlated across the
+        observation dimensions, using e.g. ``pm.MvNormal.dist``. In-sample
+        errors are residuals, not random variables.
+
+        A learned scale must be a model variable shared with the observation:
+        create ``sigma = pm.HalfNormal("sigma", 1)`` in the model body, use it
+        in the observation, and pass ``pm.Normal.dist(0, sigma)``. Hence a
+        ``Prior`` with a hyper-prior parameter (which would exist only on
+        forecasting builds and be drawn from its prior), a model variable
+        instead of a ``.dist()``, and a ``.dist()`` depending on unnamed random
+        variables are rejected, on training builds too. A Normal/StudentT
+        ``Prior`` must leave ``mu`` unset or zero, and a ``pm.Normal.dist`` /
+        ``pm.StudentT.dist`` must have a constant zero location
+        (``pm.Normal.dist(sigma)`` binds ``sigma`` as ``mu``). The locations of
+        other dists are not checked.
     xs
         Optional labeled inputs spanning the full horizon. The time dimension
         is selected by name, and coordinates are checked. Future inputs must
         be known covariates or explicit scenarios: never derive future update
         gates from held-out observations. Extra rows are ignored during a
         shorter training build.
+    params
+        Tensor parameters passed explicitly to both callbacks. Required for
+        random coefficients: scan cannot close over RVs, and closed-over RVs
+        are not detected.
     dims
         Non-time observation dimensions, inferred from ``y`` by default.
         Labeled data are transposed into this order before entering the scan.
@@ -161,7 +261,7 @@ def ssoe(
     Notes
     -----
     This is an observation-driven filter, not a latent Markov process. For
-    sampled hidden states use :func:`~pymc_forecast.markov.markov_time_series`;
+    sampled hidden states use :func:`~pymc_forecast.markov.markov_series`;
     for linear-Gaussian hidden states consider the statespace backend.
     """
     values, dims = _history(h, y, dims)
@@ -236,11 +336,10 @@ def ssoe(
     )
     mu = outputs[-2]
     empty = pt.zeros((0, *row_shape), dtype=mu.dtype)
+    _accept_noise(noise)
     if h.future == 0:
         return SSOEResult(mu, empty, empty, dims)
-    errors = noise_fn(f"{name}_future", (FUTURE_DIM, *dims))
-    if model.named_vars_to_dims.get(errors.name) != (FUTURE_DIM, *dims):
-        raise AlignmentError("ssoe noise_fn must register the supplied dimensions")
+    errors = _future_noise(name, noise, dims)
     errors = pt.specify_shape(errors, (h.future, *row_shape))
     registered = set(model.named_vars)
     outputs = scan(

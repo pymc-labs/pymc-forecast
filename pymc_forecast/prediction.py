@@ -256,7 +256,7 @@ def forecast(
     Parameters
     ----------
     model_fn
-        The model body (``(Horizon, covariates) -> None`` or a
+        The model body (``(covariates, data=None) -> None`` or a
         :class:`~pymc_forecast.model.ForecastingModel`).
     posterior
         A fitted posterior (``DataTree``/``InferenceData`` or ``Dataset``).

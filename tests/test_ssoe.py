@@ -24,17 +24,19 @@ def history(values=(1.0, 2.0, 4.0)):
     return xr.DataArray(np.asarray(values), dims="time", coords={"time": np.arange(len(values))})
 
 
-def arma(h, covariates):
+def arma(covariates, data=None):
+    h = Horizon.from_data(covariates, data)
     phi = pm.Normal("phi", 0, 0.5)
     theta = pm.Normal("theta", 0, 0.5)
     sigma = pm.HalfNormal("sigma", 1)
     result = ssoe(
         h,
         "eps",
+        None,
         (0.0, 0.0),
-        mean=lambda state, x, phi, theta: phi * state[0] + theta * state[1],
-        update=lambda state, y, eps, x, phi, theta: (y, eps),
-        noise_fn=lambda name, dims: pm.Normal(name, 0, sigma, dims=dims),
+        lambda state, x, phi, theta: phi * state[0] + theta * state[1],
+        lambda state, y, eps, x, phi, theta: (y, eps),
+        pm.Normal.dist(0.0, sigma),
         params=(phi, theta),
     )
     pm.Normal("obs", result.mu, sigma, observed=h.data.values, dims="time")
@@ -105,15 +107,17 @@ def test_future_inputs_and_permuted_panel_dims():
         coords={"series": ["a", "b"], "time": [0, 1, 2, 3]},
     )
 
-    def model_fn(h, cov):
+    def model_fn(covariates, data=None):
+        h = Horizon.from_data(covariates, data)
         r = ssoe(
             h,
             "eps",
+            None,
             np.zeros(2),
-            mean=lambda state, x: state + x,
-            update=lambda state, y, eps, x: y,
-            noise_fn=lambda n, d: pm.MvNormal(n, np.zeros(2), np.eye(2), dims=d),
-            xs=xs,
+            lambda state, x: state + x,
+            lambda state, y, eps, x: y,
+            pm.Normal.dist(0.0, 1.0),
+            xs,
         )
         pm.Deterministic("means", r.mu, dims=("time", "series"))
         pm.Normal("obs", r.mu, 1, observed=h.data.values, dims=("time", "series"))
@@ -132,11 +136,13 @@ def test_zero_horizon_and_single_observation():
         r = ssoe(
             h,
             "eps",
+            None,
             0.0,
             lambda state, x: state,
             lambda state, y, eps, x: y,
-            lambda n, d: pytest.fail("noise factory must not be called during training"),
+            pm.Normal.dist(0.0, 1.0),
         )
+        assert "eps_future" not in pm.modelcontext(None).named_vars
         assert r.dims == ()
         assert r.mu.eval().shape == (1,)
         assert r.mu_future.eval().shape == r.y_future.eval().shape == (0,)
@@ -149,11 +155,12 @@ def test_gate_freezes_state_and_no_future_data_leakage():
         r = ssoe(
             h,
             "eps",
+            None,
             0.0,
             lambda state, x: state,
             lambda state, y, eps, x: pt.where(x, y, state),
-            lambda n, d: pm.Normal(n, 0, 1, dims=d),
-            xs=xs,
+            pm.Normal.dist(0.0, 1.0),
+            xs,
         )
         fn = pytensor.function([model["eps_future"]], [r.mu, r.mu_future, r.y_future])
         mu, future_mu, future_y = fn([1.0, 2.0])
@@ -166,7 +173,7 @@ def test_gate_freezes_state_and_no_future_data_leakage():
 def test_missing_history_rejected(bad):
     h = Horizon(bad, np.arange(0 if bad is not None else 3))
     with pm.Model(coords={"time": h.time}), pytest.raises(HorizonError, match="history"):
-        ssoe(h, "eps", 0, lambda s, x: s, lambda s, y, e, x: y, None)
+        ssoe(h, "eps", None, 0, lambda s, x: s, lambda s, y, e, x: y, pm.Normal.dist())
 
 
 @pytest.mark.parametrize("what", ["y_time", "xs_time", "xs_short", "batch", "raw_xs", "nan"])
@@ -188,7 +195,7 @@ def test_invalid_labeled_inputs_rejected(what):
         y = y.copy(data=[1.0, np.nan, 3.0])
     with pm.Model(coords={"time": h.time, "time_future": h.time_future, "series": ["a"]}):
         with pytest.raises((AlignmentError, ValueError)):
-            ssoe(h, "eps", 0, lambda s, x: s, lambda s, y, e, x: y, None, y=y, xs=xs)
+            ssoe(h, "eps", y, 0, lambda s, x: s, lambda s, y, e, x: y, pm.Normal.dist(), xs)
 
 
 @pytest.mark.parametrize("bad", ["mean_shape", "state_shape", "state_structure", "random"])
@@ -209,7 +216,7 @@ def test_callback_contract(bad):
 
     h = Horizon(history(), np.arange(3))
     with pm.Model(coords={"time": h.time}), pytest.raises(ValueError):
-        ssoe(h, "eps", 0.0, mean, update, None)
+        ssoe(h, "eps", None, 0.0, mean, update, pm.Normal.dist())
 
 
 def test_hmc_forecaster_uses_scan_gradients_and_shared_protocol():
@@ -255,7 +262,10 @@ def test_holt_winters_matches_reference_with_mixed_state_shapes():
             np.r_[seasons[1:], seasons[0] + gamma * error],
         )
 
-    def update(state, y, error, x):
+    def mean(state, x, phi):
+        return state[0] + phi * state[1] + state[2][0]
+
+    def update(state, y, error, x, phi):
         level, trend, seasons = state
         return (
             level + phi * trend + alpha * error,
@@ -263,15 +273,9 @@ def test_holt_winters_matches_reference_with_mixed_state_shapes():
             pt.concatenate([seasons[1:], (seasons[0] + gamma * error)[None]]),
         )
 
+    sigma = 1.0
     with pm.Model(coords={"time": h.time, "time_future": h.time_future}) as model:
-        r = ssoe(
-            h,
-            "eps",
-            initial,
-            lambda s, x: s[0] + phi * s[1] + s[2][0],
-            update,
-            lambda n, d: pm.Normal(n, 0, 1, dims=d),
-        )
+        r = ssoe(h, "eps", None, initial, mean, update, pm.Normal.dist(0.0, sigma), params=(phi,))
         fn = pytensor.function([model["eps_future"]], [r.mu, r.mu_future, r.y_future])
         mu, future_mu, future_y = fn(future_errors)
     np.testing.assert_allclose(mu, reference_means[: h.t_obs])
@@ -279,15 +283,156 @@ def test_holt_winters_matches_reference_with_mixed_state_shapes():
     np.testing.assert_allclose(future_y, reference_y[h.t_obs :])
 
 
-def test_future_error_factory_must_preserve_named_dims():
-    h = Horizon(history(), np.arange(3), np.arange(3, 5))
+def test_explicit_y_drives_the_filter_and_must_match_time_coords():
+    """A driving series other than ``h.data`` is used when its time coords match."""
+    observed = history([10.0, 10.0, 10.0])
+    driving = history([1.0, 2.0, 4.0])
+    h = Horizon(observed, np.arange(3), np.arange(3, 5))
     with pm.Model(coords={"time": h.time, "time_future": h.time_future}):
-        with pytest.raises(AlignmentError, match="supplied dimensions"):
+        r = ssoe(
+            h,
+            "eps",
+            driving,
+            0.0,
+            lambda state, x: state,
+            lambda state, y, error, x: y,
+            pm.Normal.dist(0.0, 1.0),
+        )
+        np.testing.assert_allclose(r.mu.eval(), [0.0, 1.0, 2.0])
+
+    shifted = driving.assign_coords(time=[1, 2, 3])
+    with pm.Model(coords={"time": h.time, "time_future": h.time_future}):
+        with pytest.raises(AlignmentError, match="time"):
             ssoe(
                 h,
                 "eps",
+                shifted,
                 0.0,
-                lambda s, x: s,
-                lambda s, y, e, x: y,
-                lambda n, d: pm.Normal(n, 0, 1, shape=2),
+                lambda state, x: state,
+                lambda state, y, error, x: y,
+                pm.Normal.dist(0.0, 1.0),
             )
+
+
+def test_noise_rv_factory_is_rejected():
+    h = Horizon(history(), np.arange(3), np.arange(3, 5))
+    with pm.Model(coords={"time": h.time, "time_future": h.time_future}):
+        with pytest.raises(HorizonError, match="RVFactory"):
+            ssoe(
+                h,
+                "eps",
+                None,
+                0.0,
+                lambda state, x: state,
+                lambda state, y, error, x: y,
+                lambda name, dims: pm.Normal(name, 0, 1, dims=dims),
+            )
+
+
+def _identity_ssoe(h, noise):
+    return ssoe(h, "eps", None, 0.0, lambda state, x: state, lambda state, y, error, x: y, noise)
+
+
+def test_prior_noise_with_hyper_prior_is_rejected_on_a_training_build():
+    prior = pytest.importorskip("pymc_extras.prior").Prior
+    h = Horizon(history(), np.arange(3))
+    noise = prior("Normal", sigma=prior("HalfNormal", sigma=1))
+    with pm.Model(coords={"time": h.time}):
+        with pytest.raises(HorizonError, match="sigma"):
+            _identity_ssoe(h, noise)
+
+
+def test_prior_noise_with_constant_parameters_registers_only_the_future_error():
+    prior = pytest.importorskip("pymc_extras.prior").Prior
+    h = Horizon(history(), np.arange(3), np.arange(3, 5))
+    with pm.Model(coords={"time": h.time, "time_future": h.time_future}) as model:
+        _identity_ssoe(h, prior("Normal", sigma=0.5))
+    assert [rv.name for rv in model.free_RVs] == ["eps_future"]
+
+
+@pytest.mark.parametrize(
+    "make", [lambda: pm.Normal.dist(2.0), lambda: pm.StudentT.dist(4.0, 1.0, sigma=1.0)]
+)
+def test_dist_noise_with_nonzero_location_is_rejected(make):
+    h = Horizon(history(), np.arange(3), np.arange(3, 5))
+    with pm.Model(coords={"time": h.time, "time_future": h.time_future}):
+        with pytest.raises(HorizonError, match="zero"):
+            _identity_ssoe(h, make())
+
+
+def test_dist_noise_that_is_a_model_variable_is_rejected():
+    h = Horizon(history(), np.arange(3), np.arange(3, 5))
+    with pm.Model(coords={"time": h.time, "time_future": h.time_future}):
+        with pytest.raises(HorizonError, match="'raw'"):
+            _identity_ssoe(h, pm.Normal("raw", 0, 1))
+
+
+def test_prior_noise_with_a_model_variable_parameter_is_rejected():
+    prior = pytest.importorskip("pymc_extras.prior").Prior
+    h = Horizon(history(), np.arange(3))
+    with pm.Model(coords={"time": h.time}):
+        sigma = pm.HalfNormal("obs_sigma", 1.0)
+        with pytest.raises(HorizonError, match="non-constant"):
+            _identity_ssoe(h, prior("Normal", sigma=sigma))
+
+
+def test_random_only_custom_dist_noise_registers_the_future_error():
+    h = Horizon(history(), np.arange(3), np.arange(3, 5))
+
+    def draw(mu, sigma, rng=None, size=None):
+        return rng.normal(mu, sigma, size=size)
+
+    with pm.Model(coords={"time": h.time, "time_future": h.time_future}) as model:
+        _identity_ssoe(h, pm.CustomDist.dist(0.0, 1.0, random=draw))
+    assert [rv.name for rv in model.free_RVs] == ["eps_future"]
+
+
+def test_mvnormal_dist_noise_registers_series_support():
+    """A multivariate ``.dist()`` keeps its support axis out of the batch size."""
+    y = xr.DataArray(
+        [[1.0, 2.0], [3.0, 4.0]],
+        dims=("time", "series"),
+        coords={"series": ["a", "b"], "time": [0, 1]},
+    )
+    h = Horizon(y, y.time.values, np.arange(2, 4))
+    with pm.Model(
+        coords={"time": h.time, "time_future": h.time_future, "series": y.series.values}
+    ) as model:
+        ssoe(
+            h,
+            "eps",
+            None,
+            np.zeros(2),
+            lambda state, x: state,
+            lambda state, y, error, x: state,
+            pm.MvNormal.dist(np.zeros(2), np.eye(2)),
+        )
+    assert model.named_vars_to_dims["eps_future"] == ("time_future", "series")
+    assert tuple(model["eps_future"].eval().shape) == (2, 2)
+
+
+def test_per_series_scale_dist_noise_broadcasts_over_series():
+    """A ``.dist()`` with a per-series scale maps it onto the series dim."""
+    y = xr.DataArray(
+        [[1.0, 2.0], [3.0, 4.0]],
+        dims=("time", "series"),
+        coords={"series": ["a", "b"], "time": [0, 1]},
+    )
+    h = Horizon(y, y.time.values, np.arange(2, 5))
+    sigma = np.array([0.5, 2.0])
+    with pm.Model(
+        coords={"time": h.time, "time_future": h.time_future, "series": y.series.values}
+    ) as model:
+        ssoe(
+            h,
+            "eps",
+            None,
+            np.zeros(2),
+            lambda state, x: state,
+            lambda state, y, error, x: state,
+            pm.Normal.dist(0.0, sigma),
+        )
+    assert model.named_vars_to_dims["eps_future"] == ("time_future", "series")
+    point = np.ones((3, 2))
+    expected = pm.logp(pm.Normal.dist(0.0, sigma), point).sum().eval()
+    np.testing.assert_allclose(model.compile_logp()({"eps_future": point}), expected)

@@ -30,7 +30,7 @@ The group names follow the ArviZ convention (out-of-sample predictions live in
 | `forecast` | {data}`pymc_forecast.FORECAST_VAR` | `predictions` | the forecast-horizon variable |
 | `mu_future` | {data}`pymc_forecast.MU_FORECAST_VAR` | `predictions` | noise-free latent predictor over the forecast horizon |
 | `expected_observation_future` | {data}`pymc_forecast.EXPECTED_OBSERVATION_FORECAST_VAR` | `predictions` | optional conditional expected observation over the forecast horizon |
-| `{name}_future` | — | `predictions` | forecast-horizon slice of each per-step latent registered with `time_series` |
+| `{name}_future` | — | `predictions` | forecast-horizon slice of each per-step latent registered by `innovations` (and by `markov_series` / `ssoe` for their own future names) |
 
 `mu` / `mu_future` carry the full draw-level samples of the latent passed to
 {func}`pymc_forecast.predict` — before observation noise, so they separate

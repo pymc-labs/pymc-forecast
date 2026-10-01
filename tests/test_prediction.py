@@ -7,7 +7,7 @@ from example_models import linear_model, make_trend_data, poisson_model
 
 from pymc_forecast.data import TIME_DIM
 from pymc_forecast.exceptions import HorizonError
-from pymc_forecast.model import ForecastingModel, build_model
+from pymc_forecast.model import ForecastingModel, Horizon, build_model
 from pymc_forecast.prediction import (
     forecast,
     posterior_dataset,
@@ -19,8 +19,9 @@ from pymc_forecast.prediction import (
 SEED = 99
 
 
-def custom_forecast_model(h, covariates):
+def custom_forecast_model(covariates, data=None):
     """Register obs/forecast directly, without the standard predict() helper."""
+    h = Horizon.from_data(covariates, data)
     level = pm.Normal("level")
     observed = None if h.data is None else h.data.values
     pm.Normal("obs", level, 1, observed=observed, dims="time")
@@ -157,10 +158,10 @@ class TestExpectedObservation:
         # LogNormal's mean depends on sigma as well as its location. The OO
         # helper must preserve that explicit expression and the panel labels.
         class LogNormalPanel(ForecastingModel):
-            def model(self, h, covariates):
+            def model(self, covariates, data=None):
                 location = pm.Normal("location")
                 sigma = pm.HalfNormal("sigma", dims="series")
-                eta = pt.broadcast_to(location, (h.duration, 1))
+                eta = pt.broadcast_to(location, (self.horizon.duration, 1))
                 self.predict(
                     lambda name, window, dims, observed: pm.LogNormal(
                         name, window, sigma, dims=dims, observed=observed

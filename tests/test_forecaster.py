@@ -15,20 +15,21 @@ from example_models import (
 )
 
 from pymc_forecast.exceptions import AlignmentError, MethodResolutionError, NotFittedError
+from pymc_forecast.fit import _check_vi_convergence
 from pymc_forecast.forecaster import (
     BaseForecaster,
     Forecaster,
     HMCForecaster,
     PathfinderForecaster,
-    _check_vi_convergence,
 )
-from pymc_forecast.model import predict
+from pymc_forecast.model import Horizon, predict
 
 SEED = 4242
 
 
-def deterministic_replay_model(h, covariates):
+def deterministic_replay_model(covariates, data=None):
     """Expose one posterior scalar across every time step without noise."""
+    h = Horizon.from_data(covariates, data)
     value = pm.Normal("value")
     latent = pt.repeat(value, h.duration)
     predict(
@@ -111,11 +112,14 @@ class TestJAXForecasterVI:
     def test_conjugate_normal_posterior(self):
         pytest.importorskip("jax")
 
-        def model(h, covariates):
+        def model(covariates, data=None):
+            h = Horizon.from_data(covariates, data)
             theta = pm.Normal("theta", 0.0, 1.0)
             predict(
                 h,
-                lambda name, mu, dims, obs: pm.Normal(name, mu, 1.0, dims=dims, observed=obs),
+                lambda name, mu, dims, observed: pm.Normal(
+                    name, mu, 1.0, dims=dims, observed=observed
+                ),
                 pt.ones(h.duration) * theta,
             )
 
@@ -376,13 +380,14 @@ class TestFixedPosterior:
 
     def test_vi_posterior_can_be_drawn_in_host_batches(self, fc, monkeypatch):
         calls = []
-        draw = fc._draw_posterior
+        sample = fc.approx.sample
 
-        def record(size, random_seed=None):
+        def record(*args, draws=None, random_seed=None, **kwargs):
+            size = draws if draws is not None else args[0]
             calls.append(size)
-            return draw(size, random_seed)
+            return sample(*args, draws=draws, random_seed=random_seed, **kwargs)
 
-        monkeypatch.setattr(fc, "_draw_posterior", record)
+        monkeypatch.setattr(fc.approx, "sample", record)
         posterior = fc.draw_posterior(23, random_seed=SEED, batch_size=7)
 
         assert calls == [7, 7, 7, 2]

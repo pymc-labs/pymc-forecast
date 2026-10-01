@@ -5,9 +5,10 @@ import pymc as pm
 import pytest
 import xarray as xr
 
+import pymc_forecast
 from pymc_forecast.exceptions import HorizonError
 from pymc_forecast.forecaster import HMCForecaster
-from pymc_forecast.markov import markov_time_series
+from pymc_forecast.markov import markov_series
 from pymc_forecast.model import Horizon, build_model, predict
 
 SEED = 777
@@ -16,12 +17,20 @@ HORIZON = 5
 DRIFT = 0.15
 
 
-def rw_model(h: Horizon, covariates: xr.DataArray) -> None:
+def test_markov_series_exported_old_name_removed() -> None:
+    assert "markov_series" in pymc_forecast.__all__
+    assert "markov_time_series" not in pymc_forecast.__all__
+    assert callable(pymc_forecast.markov_series)
+    assert not hasattr(pymc_forecast, "markov_time_series")
+
+
+def rw_model(covariates: xr.DataArray, data=None) -> None:
     """Latent random walk with drift, observed with Normal noise."""
+    h = Horizon.from_data(covariates, data)
     # "mu" is reserved by predict() for the noise-free predictor
     drift = pm.Normal("drift", 0.0, 0.5)
     sigma = pm.HalfNormal("sigma", 0.2)
-    level = markov_time_series(
+    level = markov_series(
         h,
         "level",
         init=0.0,
@@ -70,13 +79,14 @@ class TestModelConstruction:
         h = Horizon(data=None, time=np.arange(T_OBS), time_future=np.arange(T_OBS, T_OBS + 2))
         with pm.Model(coords={"time": h.time, "time_future": h.time_future}):
             with pytest.raises(HorizonError, match="requires observed data"):
-                markov_time_series(h, "z", 0.0, lambda z: pm.Normal.dist(z, 1.0))
+                markov_series(h, "z", 0.0, lambda z: pm.Normal.dist(z, 1.0))
 
     def test_xs_must_span_horizon(self, rw_data):
         data, cov = rw_data
 
-        def model_fn(h, covariates):
-            markov_time_series(
+        def model_fn(covariates, data=None):
+            h = Horizon.from_data(covariates, data)
+            markov_series(
                 h,
                 "z",
                 0.0,
@@ -121,9 +131,10 @@ class TestExogenousInputs:
         impulses = np.zeros(T_OBS + HORIZON)
         impulses[T_OBS:] = 5.0  # future-only impulse
 
-        def model_fn(h, covariates):
+        def model_fn(covariates, data=None):
+            h = Horizon.from_data(covariates, data)
             sigma = pm.HalfNormal("sigma", 0.2)
-            level = markov_time_series(
+            level = markov_series(
                 h,
                 "level",
                 init=0.0,

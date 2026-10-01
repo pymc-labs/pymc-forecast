@@ -32,13 +32,20 @@ from pymc_forecast.exceptions import (
     PymcForecastError,
 )
 from pymc_forecast.features import fourier_features, periodic_repeat
+from pymc_forecast.fit import (
+    FitResult,
+    draw_posterior,
+    fit_mcmc,
+    fit_pathfinder,
+    fit_vi,
+)
 from pymc_forecast.forecaster import (
     Forecaster,
     HMCForecaster,
     PathfinderForecaster,
 )
 from pymc_forecast.gaussian import conditional_mvn, predict_mvn
-from pymc_forecast.markov import markov_time_series
+from pymc_forecast.markov import markov_series
 from pymc_forecast.metrics import (
     DEFAULT_METRICS,
     crps_empirical,
@@ -61,8 +68,8 @@ from pymc_forecast.model import (
     ForecastingModel,
     Horizon,
     build_model,
+    innovations,
     predict,
-    time_series,
 )
 from pymc_forecast.prediction import (
     forecast,
@@ -74,7 +81,7 @@ from pymc_forecast.priors import PriorConfig
 from pymc_forecast.ssoe import SSOEResult, ssoe
 from pymc_forecast.statespace import StatespaceForecaster, StatespaceModel
 
-__version__ = "0.2.0"
+__version__ = "0.3.0.dev0"
 
 __all__ = [
     "CHAIN_DIM",
@@ -92,6 +99,7 @@ __all__ = [
     "AlignmentError",
     "BacktestResult",
     "BacktestWindowError",
+    "FitResult",
     "Forecaster",
     "ForecastingModel",
     "HMCForecaster",
@@ -114,6 +122,7 @@ __all__ = [
     "concat_time_index",
     "conditional_mvn",
     "crps_empirical",
+    "draw_posterior",
     "eval_coverage",
     "eval_crps",
     "eval_interval_score",
@@ -122,10 +131,14 @@ __all__ = [
     "eval_rmse",
     "evaluate_forecast",
     "extend_time_index",
+    "fit_mcmc",
+    "fit_pathfinder",
+    "fit_vi",
     "forecast",
     "fourier_features",
+    "innovations",
     "make_mase",
-    "markov_time_series",
+    "markov_series",
     "null_covariates",
     "periodic_repeat",
     "predict",
@@ -135,5 +148,4 @@ __all__ = [
     "results_to_dataframe",
     "ssoe",
     "thin_draws",
-    "time_series",
 ]

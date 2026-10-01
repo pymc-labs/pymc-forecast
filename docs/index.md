@@ -26,23 +26,26 @@ pip install 'pymc-forecast[jax]'     # + JAX-native ADVI backend
 
 ```python
 import pymc as pm, pytensor.tensor as pt
-from pymc_forecast import Forecaster, predict, time_series
+from pymc_forecast import Forecaster, ForecastingModel
 
 
-def local_level(h, covariates):
-    drift = time_series(h, "drift", lambda name, dims: pm.Normal(name, 0.0, 0.5, dims=dims))
-    sigma = pm.HalfNormal("sigma", 1.0)
-    predict(
-        h,
-        lambda name, mu, dims, obs: pm.Normal(name, mu, sigma, dims=dims, observed=obs),
-        pt.cumsum(drift),
-    )
+class LocalLevel(ForecastingModel):
+    def model(self, covariates, data=None):
+        drift = self.innovations("drift", pm.Normal.dist(0.0, 0.5))
+        sigma = pm.HalfNormal("sigma", 1.0)
+        self.predict(pm.Normal.dist(0.0, sigma), pt.cumsum(drift))
 
 
-fc = Forecaster(local_level, train, num_steps=5_000)  # ADVI
+fc = Forecaster(LocalLevel(), train, num_steps=5_000)  # ADVI
 idata = fc.forecast(horizon=8, num_samples=500)
 forecast = idata["predictions"]["forecast"]  # dims: (chain, draw, time_future)
 ```
+
+Prefer plain functions? The same model can be written as a function that calls
+{func}`~pymc_forecast.innovations` / {func}`~pymc_forecast.predict` on a
+{class}`~pymc_forecast.Horizon` and fitted with {func}`~pymc_forecast.fit_vi`,
+{func}`~pymc_forecast.draw_posterior`, and {func}`~pymc_forecast.forecast` — both forms
+build the same model, and every forecaster, fitter, and `backtest` accepts either.
 
 **[Start with the full workflow →](quickstart.md)** ·
 **[Browse the examples →](examples/index.md)** ·

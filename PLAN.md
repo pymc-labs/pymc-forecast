@@ -78,11 +78,11 @@ Module inventory of the source:
 - **`pymc_extras.statespace`**: structural time series (level/trend, seasonality,
   cycles, AR, regression components), SARIMAX, VARMAX — with Kalman filtering and
   built-in `.forecast()`. This covers the linear-Gaussian slice of what
-  `markov_time_series` is used for, with exact marginalization instead of sampling
+  `markov_series` is used for, with exact marginalization instead of sampling
   per-step latents (usually better posteriors and faster). The port should
   interoperate: statespace models as first-class citizens in `backtest`/metrics.
 - **`fit_pathfinder`**: replaces the entire BlackJAX contrib module.
-- Scan-based `markov_time_series` remains valuable for arbitrary nonlinear /
+- Scan-based `markov_series` remains valuable for arbitrary nonlinear /
   non-Gaussian transitions that statespace can't express.
 
 ## Key design decisions
@@ -92,10 +92,13 @@ Module inventory of the source:
    `InferenceData`/xarray with real time coordinates, metrics reduce over named
    dims. Coords (e.g. `pandas.DatetimeIndex`) flow from input data through to
    forecast outputs.
-2. **Model API shape.** Keep the two-level design — a functional core where the
-   user writes a model body against a `Horizon` (primitives: `time_series`,
-   `markov_time_series`, `predict`, `predict_glm`) executed inside a managed
-   `pm.Model` context, plus an OOP `ForecastingModel` facade. The builder
+2. **Model API shape.** Keep the two-level design. The user-facing API leads
+   with the object-oriented `ForecastingModel` (bound `innovations` / `predict` /
+   `markov_series`, `self.horizon`, injectable priors) and the forecaster
+   classes. Underneath is a functional core of model bodies
+   `(covariates, data=None)` built on `Horizon.from_data`, with primitives
+   `innovations`, `markov_series`, `predict`, `ssoe`, `predict_mvn`, and fitters
+   `fit_vi` / `fit_mcmc` / `fit_pathfinder` that the classes call. The builder
    constructs a fresh model per call (train: no future coords; forecast: extended
    coords), which is idiomatic PyMC and keeps the "one model definition" invariant.
 3. **Randomness.** `rng_key` threading → `random_seed` integers / numpy Generators;
@@ -103,6 +106,20 @@ Module inventory of the source:
 4. **Performance posture.** Accept that per-window refits recompile unless shapes
    are fixed; document `nuts_sampler="nutpie"` / `"numpyro"` for speed; use
    `pm.Data` + `set_data` wherever shapes allow.
+
+## 0.3 / 0.4 catch-up
+
+The object-oriented `ForecastingModel` is the primary documented path; the
+functional core is the shared implementation and the equivalent alternative:
+a model body is `(covariates, data=None) -> None` and builds its own `Horizon`
+with `Horizon.from_data`. The primitives are `innovations`, `markov_series`,
+`predict`, `ssoe`, and `predict_mvn`. `time_series`, `markov_time_series`, and
+`Horizon.from_arrays` are gone. Functional fitters `fit_vi`, `fit_mcmc`, and
+`fit_pathfinder` are the inference core; the forecaster classes call them
+and keep their constructors and attributes.
+
+VAR is deferred to an Impulso integration. Haar / DCT are deferred to
+<https://github.com/pymc-labs/pymc-forecast/issues/58>.
 
 ## What gets dropped or shrinks
 

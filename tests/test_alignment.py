@@ -7,16 +7,17 @@ import pytensor.tensor as pt
 import pytest
 import xarray as xr
 
-from pymc_forecast import build_model, predict
+from pymc_forecast import Horizon, build_model, predict
 from pymc_forecast.exceptions import AlignmentError
 from pymc_forecast.forecaster import BaseForecaster
 
 
-def regression(h, covariates):
+def regression(covariates, data=None):
+    h = Horizon.from_data(covariates, data)
     beta = pm.Normal("beta", 0, 1, dims="covariate")
     predict(
         h,
-        lambda name, mu, dims, obs: pm.Normal(name, mu, 1, dims=dims, observed=obs),
+        lambda name, mu, dims, observed: pm.Normal(name, mu, 1, dims=dims, observed=observed),
         covariates.values @ beta,
     )
 
@@ -78,7 +79,7 @@ def test_shared_panel_coordinates_rejected_before_model_body(kind):
         "unlabeled": data.drop_vars("series"),
     }[kind]
 
-    def model(h, covariates):
+    def model(covariates, data=None):
         raise AssertionError("coordinate errors must fail before the model is built")
 
     with pytest.raises(AlignmentError, match=r"coords must match|size mismatch|unlabeled"):
@@ -93,11 +94,12 @@ def test_shared_panel_coordinates_rejected_before_model_body(kind):
     ],
 )
 def test_forecast_preserves_short_index_frequency(index):
-    def model(h, covariates):
+    def model(covariates, data=None):
+        h = Horizon.from_data(covariates, data)
         theta = pm.Normal("theta")
         predict(
             h,
-            lambda name, mu, dims, obs: pm.Normal(name, mu, 1, dims=dims, observed=obs),
+            lambda name, mu, dims, observed: pm.Normal(name, mu, 1, dims=dims, observed=observed),
             pt.ones(h.duration) * theta,
         )
 
