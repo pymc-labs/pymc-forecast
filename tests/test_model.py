@@ -284,6 +284,50 @@ def test_predict_callable_registers_obs_and_forecast():
     assert built.named_vars_to_dims["forecast"] == ("time_future",)
 
 
+@pytest.mark.parametrize("observation", ["normal_dist", "studentt_dist", "callable", "mvn"])
+def test_predict_shared_panel_latent_draws_each_series(observation):
+    from pymc_forecast import forecast, null_covariates
+
+    time = np.arange(4)
+    series = ["a", "b", "c"]
+    data = xr.DataArray(
+        np.ones((4, 3)), dims=("time", "series"), coords={"time": time, "series": series}
+    )
+    covariates = null_covariates(np.arange(6))
+
+    def model_fn(covariates, data=None):
+        h = Horizon.from_data(covariates, data)
+        theta = pm.Normal("theta")
+        latent = pt.ones((h.duration, 1)) * theta
+        if observation == "normal_dist":
+            obs = pm.Normal.dist(0.0, 1.0)
+        elif observation == "studentt_dist":
+            obs = pm.StudentT.dist(5.0, 0.0, sigma=1.0)
+        elif observation == "mvn":
+
+            def obs(mu):
+                return pm.MvNormal.dist(mu, cov=np.eye(3))
+
+        else:
+
+            def obs(mu):
+                return pm.Normal.dist(mu, 1.0)
+
+        predict(h, obs, latent)
+
+    model = build_model(model_fn, data, covariates)
+    assert model["obs"].eval().shape == (4, 3)
+    assert model["forecast"].eval().shape == (2, 3)
+    posterior = xr.Dataset({"theta": (("chain", "draw"), np.full((1, 32), 2.0))})
+    samples = forecast(model_fn, posterior, data, covariates, random_seed=42).predictions
+    assert samples.forecast.dims == ("chain", "draw", "time_future", "series")
+    np.testing.assert_array_equal(samples.series, series)
+    np.testing.assert_array_equal(samples.time_future, [4, 5])
+    np.testing.assert_allclose(samples.mu_future, 2.0)
+    # Resize the distribution itself: broadcasting one noise draw would couple the series.
+    assert np.any(samples.forecast.isel(series=0) != samples.forecast.isel(series=1))
+
+
 def test_predict_studentt_dist_logp_matches_named_observation():
     time = np.arange(7)
     y = np.linspace(-0.5, 0.8, time.size)

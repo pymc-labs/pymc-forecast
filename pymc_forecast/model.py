@@ -23,6 +23,7 @@ import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
 import xarray as xr
+from pymc.distributions.shape_utils import change_dist_size
 from pytensor.tensor.basic import get_underlying_scalar_constant_value
 from pytensor.tensor.exceptions import NotScalarConstantError
 from pytensor.tensor.random.basic import NormalRV, StudentTRV
@@ -263,10 +264,16 @@ def _rebuild_zero_centered(dist, latent) -> pt.TensorVariable:
 
 
 def _register_unnamed(name: str, dist, dims: tuple[str, ...], observed) -> pt.TensorVariable:
-    if not isinstance(dist, pt.TensorVariable) or dist.owner is None:
+    if not is_dist(dist):
         msg = "observation callable must return an unnamed .dist()"
         raise HorizonError(msg)
-    return pm.modelcontext(None).register_rv(dist, name, dims=dims, observed=observed)
+    model = pm.modelcontext(None)
+    shape = tuple(model.dim_lengths[dim] for dim in dims)
+    # Registration attaches dim names but does not infer the distribution's size.
+    # Keep multivariate support axes out of the batch size, as PyMC constructors do.
+    batch_shape = shape[: len(shape) - dist.owner.op.ndim_supp]
+    dist = change_dist_size(dist, batch_shape, expand=False)
+    return model.register_rv(dist, name, dims=dims, observed=observed)
 
 
 def _emit_observation(obs, name: str, segment, dims: tuple[str, ...], observed):
