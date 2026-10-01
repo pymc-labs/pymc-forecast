@@ -329,3 +329,27 @@ def test_noise_rv_factory_is_rejected():
                 lambda state, y, error, x: y,
                 lambda name, dims: pm.Normal(name, 0, 1, dims=dims),
             )
+
+
+def test_mvnormal_dist_noise_registers_series_support():
+    """A multivariate ``.dist()`` keeps its support axis out of the batch size."""
+    y = xr.DataArray(
+        [[1.0, 2.0], [3.0, 4.0]],
+        dims=("time", "series"),
+        coords={"series": ["a", "b"], "time": [0, 1]},
+    )
+    h = Horizon(y, y.time.values, np.arange(2, 4))
+    with pm.Model(
+        coords={"time": h.time, "time_future": h.time_future, "series": y.series.values}
+    ) as model:
+        ssoe(
+            h,
+            "eps",
+            None,
+            np.zeros(2),
+            lambda state, x: state,
+            lambda state, y, error, x: state,
+            pm.MvNormal.dist(np.zeros(2), np.eye(2)),
+        )
+    assert model.named_vars_to_dims["eps_future"] == ("time_future", "series")
+    assert tuple(model["eps_future"].eval().shape) == (2, 2)

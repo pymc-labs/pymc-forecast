@@ -117,7 +117,9 @@ def _future_noise(name: str, noise, dims: tuple[str, ...]) -> pt.TensorVariable:
     except KeyError as exc:
         msg = f"ssoe requires model coord {exc.args[0]!r}"
         raise HorizonError(msg) from exc
-    return model.register_rv(expand_dist(noise, shape), f"{name}_future", dims=future_dims)
+    # expand_dist prepends this size; support axes already belong to the dist.
+    batch_shape = shape[: len(shape) - noise.owner.op.ndim_supp]
+    return model.register_rv(expand_dist(noise, batch_shape), f"{name}_future", dims=future_dims)
 
 
 def ssoe(
