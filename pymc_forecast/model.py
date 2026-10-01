@@ -212,16 +212,27 @@ _DIST_LOC_ERROR = (
 
 
 def _is_observation_factory(fn) -> bool:
-    """Whether ``fn`` takes the 4-argument ``(name, latent, dims, observed)`` form.
+    """Whether ``fn`` requires the 4-argument ``(name, latent, dims, observed)`` form.
 
-    Decided by arity, not parameter names, so factories written for the
-    original API keep working whatever they call their arguments.
+    True iff the signature binds four positional arguments and cannot bind
+    one. Decided by arity, not parameter names, so 4-argument factories stay
+    factories whatever they call their arguments. Callables that also accept a
+    single argument, such as PyMC ``.dist`` classmethods with ``*args``, take
+    the 1-argument path, as do callables whose signature cannot be inspected.
     """
     try:
-        inspect.signature(fn).bind(None, None, None, None)
+        signature = inspect.signature(fn)
     except (TypeError, ValueError):
         return False
-    return True
+    try:
+        signature.bind(None, None, None, None)
+    except TypeError:
+        return False
+    try:
+        signature.bind(None)
+    except TypeError:
+        return True
+    return False
 
 
 def _is_zero_constant(var) -> bool:
@@ -309,7 +320,7 @@ def predict(
     obs
         Observation specification, dispatched in order: a pymc-extras
         ``Prior`` (``mu`` left unset; nested hyper-priors shared across
-        segments), a callable that accepts four positional arguments
+        segments), a callable that requires four positional arguments
         (``(name, latent, dims, observed) -> RV``; parameter names do not
         matter), any other callable
         (``segment_latent ->`` unnamed ``.dist()``, called once per segment),

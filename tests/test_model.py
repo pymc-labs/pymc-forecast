@@ -342,6 +342,15 @@ def test_predict_four_argument_factory_dispatch_ignores_parameter_names():
     assert [rv.name for rv in model.observed_RVs] == ["obs"]
 
 
+def test_predict_one_argument_dist_classmethod_with_varargs_is_not_a_factory():
+    time = np.arange(4)
+    data = xr.DataArray(np.ones(4), dims="time", coords={"time": time})
+    h = Horizon(data=data, time=time)
+    with pm.Model(coords={"time": time}) as model:
+        predict(h, pm.Poisson.dist, pt.ones(4))
+    assert [rv.name for rv in model.observed_RVs] == ["obs"]
+
+
 def test_innovations_broadcasts_dist_parameters_over_the_series_dim():
     time, future, series = np.arange(6), np.arange(6, 10), ["a", "b", "c"]
     sigma = np.array([0.1, 1.0, 5.0])
