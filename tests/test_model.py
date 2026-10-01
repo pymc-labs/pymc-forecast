@@ -312,6 +312,27 @@ def test_predict_normal_dist_with_symbolic_zero_location_is_shifted():
     np.testing.assert_allclose(via_predict.compile_logp()({}), via_named.compile_logp()({}))
 
 
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: pm.Normal.dist(1.0, 1.0),
+        lambda: pm.Normal.dist(np.array([0.0, 1.0]), 1.0),
+        lambda: pm.Normal.dist(pm.Normal.dist(), 1.0),
+        lambda: pm.StudentT.dist(4.0, 2.0, sigma=1.0),
+    ],
+    ids=["normal_one", "normal_nonuniform", "normal_rv_loc", "studentt_two"],
+)
+def test_predict_dist_with_nonzero_location_raises(make):
+    time = np.arange(4)
+    data = xr.DataArray(
+        np.zeros((4, 2)), dims=("time", "series"), coords={"time": time, "series": ["a", "b"]}
+    )
+    h = Horizon(data=data, time=time)
+    with pm.Model(coords={"time": time, "series": ["a", "b"]}):
+        with pytest.raises(HorizonError, match="zero-centered"):
+            predict(h, make(), pt.zeros((4, 2)))
+
+
 def test_predict_laplace_dist_raises():
     time = np.arange(4)
     data = xr.DataArray(np.zeros(time.size), dims="time", coords={"time": time})

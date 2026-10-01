@@ -129,5 +129,6 @@ def test_fitters_drop_covariate_rows_past_the_training_window(fit):
     data, _ = _series(n=6)
     full = xr.DataArray(np.zeros((9, 0)), dims=("time", "covariate"), coords={"time": np.arange(9)})
     posterior = draw_posterior(fit(data, full), 4, random_seed=0)
+    assert "drift" in posterior.data_vars
     assert "drift_future" not in posterior.data_vars
     assert "forecast" not in posterior.data_vars

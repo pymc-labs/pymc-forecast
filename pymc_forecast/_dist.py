@@ -7,7 +7,7 @@ from pymc_forecast.exceptions import HorizonError
 
 
 def is_dist(value) -> bool:
-    """Whether ``value`` is an unnamed ``.dist()`` random variable."""
+    """Whether ``value`` is a ``.dist()``-style random variable (its op has ``ndim_supp``)."""
     return (
         isinstance(value, pt.TensorVariable)
         and value.owner is not None
