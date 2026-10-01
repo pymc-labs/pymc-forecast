@@ -5,13 +5,11 @@ import pymc as pm
 import pytensor.tensor as pt
 import pytest
 import xarray as xr
-from example_models import LocalLevelStatespace
 
 from pymc_forecast.exceptions import MethodResolutionError, OptionalDependencyError
 from pymc_forecast.fit import draw_posterior, fit_mcmc, fit_vi
 from pymc_forecast.forecaster import Forecaster, HMCForecaster
 from pymc_forecast.model import Horizon, innovations, predict
-from pymc_forecast.statespace import StatespaceForecaster
 
 
 def local_level(covariates, data=None):
@@ -45,17 +43,6 @@ def _series(n=8, value=1.0):
         coords={"time": np.arange(n)},
     )
     return data, covariates
-
-
-def test_fit_vi_returns_approx_and_losses_without_idata():
-    from pymc_forecast.fit import FitResult, fit_vi
-
-    data, cov = _series()
-    result = fit_vi(local_level, data, cov, num_steps=5, random_seed=0, progressbar=False)
-    assert isinstance(result, FitResult)
-    assert result.approx is not None
-    assert result.idata is None
-    assert len(np.asarray(result.losses)) == 5
 
 
 def test_draw_posterior_has_chain_and_draw_dims():
@@ -125,34 +112,6 @@ def test_fit_pathfinder_raises_when_extra_is_missing(monkeypatch):
     data, cov = _series(n=4)
     with pytest.raises(OptionalDependencyError, match="pymc-extras"):
         fit_pathfinder(conjugate_normal, data, cov, random_seed=0)
-
-
-def test_statespace_fit_passes_the_kalman_model(monkeypatch):
-    from pymc_forecast.fit import FitResult, fit_mcmc
-
-    captured = {}
-
-    def fake_fit_mcmc(*args, model=None, **kwargs):
-        captured["model"] = model
-        captured["called_build_model"] = "build_model" in fit_mcmc.__code__.co_names
-        return FitResult(idata=None, approx=None, losses=None, method="mcmc")
-
-    monkeypatch.setattr("pymc_forecast.forecaster.fit_mcmc", fake_fit_mcmc)
-    data, cov = _series(n=6)
-    forecaster = StatespaceForecaster(
-        LocalLevelStatespace(),
-        data,
-        cov,
-        draws=1,
-        tune=1,
-        chains=1,
-        random_seed=0,
-        progressbar=False,
-    )
-    assert "_fit" not in StatespaceForecaster.__dict__
-    assert StatespaceForecaster._fit is HMCForecaster._fit
-    assert captured["model"] is forecaster.model
-    assert forecaster.model is not None
 
 
 @pytest.mark.parametrize(

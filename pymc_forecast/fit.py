@@ -7,7 +7,9 @@ model. Class ``_fit`` methods pass ``model=self.model`` and do not build again.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import arviz as az
 import numpy as np
@@ -21,6 +23,88 @@ from pymc_forecast.prediction import posterior_dataset, thin_draws
 
 __all__ = ["FitResult", "draw_posterior", "fit_mcmc", "fit_pathfinder", "fit_vi"]
 
+DEFAULT_LEARNING_RATE = 0.01
+"""Default Adam learning rate for variational fits (matches upstream)."""
+
+CONVERGENCE_WINDOW_FRACTION = 0.1
+"""Fraction of the ELBO loss history in each of the two windows (one at the
+midpoint of the run, one at the end) compared by the post-fit ADVI
+convergence check (see :func:`_check_vi_convergence`)."""
+
+CONVERGENCE_MIN_WINDOW = 10
+"""Minimum steps per convergence-check window; shorter loss histories are
+too noisy to assess and are skipped."""
+
+
+def _resolve_optimizer(optimizer):
+    """Normalize an optimizer spec: ``None`` → Adam(0.01), scalar → Adam(lr)."""
+    if optimizer is None:
+        return pm.adam(learning_rate=DEFAULT_LEARNING_RATE)
+    if isinstance(optimizer, int | float):
+        learning_rate = float(optimizer)
+        if learning_rate <= 0:
+            msg = f"learning rate must be positive, got {learning_rate}"
+            raise MethodResolutionError(msg)
+        return pm.adam(learning_rate=learning_rate)
+    if callable(optimizer):
+        return optimizer
+    msg = (
+        "optimizer must be None, a positive learning rate, or a PyMC optimizer "
+        f"(e.g. pm.adam(learning_rate=...)); got {type(optimizer).__name__}"
+    )
+    raise MethodResolutionError(msg)
+
+
+def _resolve_progressbar(progressbar, kwargs: dict, kwargs_name: str) -> bool:
+    """Hoist a backend-kwargs ``progressbar`` to the uniform direct option."""
+    if "progressbar" in kwargs:
+        if progressbar is not None:
+            msg = f"pass progressbar directly or through {kwargs_name}, not both"
+            raise ValueError(msg)
+        progressbar = kwargs.pop("progressbar")
+    return False if progressbar is None else bool(progressbar)
+
+
+def _check_vi_convergence(losses, num_steps: int) -> None:
+    """Warn when the ELBO loss is still clearly descending at the end of a fit.
+
+    Heuristic: compare the median loss over the last
+    ``CONVERGENCE_WINDOW_FRACTION`` of the steps against the median over the
+    same-sized window starting at the midpoint of the history. The fit is
+    flagged when the improvement between the two windows exceeds both the
+    fluctuation within the final window (its median absolute deviation) and
+    twice the standard error of the median difference — i.e. the optimizer
+    was still making clear progress, beyond the stochastic-ELBO noise floor,
+    over the second half of the run. Medians are used because the raw ELBO
+    history is spiky early in a fit. A slow descent can hide inside the
+    noise, so the absence of a warning is not proof of convergence.
+    """
+    hist = np.asarray(losses, dtype=float)
+    if not np.isfinite(hist).all():
+        msg = "ADVI convergence could not be assessed: the loss history contains non-finite values."
+        warnings.warn(msg, UserWarning, stacklevel=2)
+        return
+    n = max(int(len(hist) * CONVERGENCE_WINDOW_FRACTION), CONVERGENCE_MIN_WINDOW)
+    if len(hist) // 2 + n > len(hist) - n:
+        return
+    last = hist[-n:]
+    mid = hist[len(hist) // 2 :][:n]
+    improvement = float(np.median(mid) - np.median(last))
+    noise = float(np.median(np.abs(last - np.median(last))))
+    # standard error of the difference of two window medians, MAD-scaled
+    sem = 1.858 * noise * float(np.sqrt(2.0 / n))
+    if improvement > max(noise, 2.0 * sem):
+        msg = (
+            f"ADVI has not converged after {num_steps} steps: the ELBO loss "
+            f"is still descending (median over the last {n} steps improved "
+            f"by {improvement:.3g} since mid-run, more than the within-window "
+            f"fluctuation {noise:.3g}). The forecast may be confidently wrong "
+            "— increase num_steps, raise the learning rate, or use "
+            "HMCForecaster; inspect the loss history via the `losses` "
+            "attribute."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=2)
+
 
 @dataclass(frozen=True)
 class FitResult:
@@ -28,12 +112,14 @@ class FitResult:
 
     Variational results carry ``approx`` and ``losses`` and leave ``idata``
     as ``None`` until something draws. MCMC and Pathfinder set ``idata``.
+    ``method`` is ``"mcmc"``, ``"pathfinder"``, or the VI method passed to
+    :func:`fit_vi` (a name or an inference object).
     """
 
     idata: az.InferenceData | None
     approx: pm.Approximation | None
     losses: np.ndarray | None
-    method: str
+    method: str | pm.variational.Inference
 
 
 def _training_inputs(data, covariates) -> tuple[xr.DataArray, xr.DataArray]:
@@ -57,15 +143,40 @@ def _training_model(model, model_fn, data, covariates):
     return build_model(model_fn, *_training_inputs(data, covariates))
 
 
-def _vi_helpers():
-    from pymc_forecast.forecaster import (
-        DEFAULT_LEARNING_RATE,
-        _check_vi_convergence,
-        _resolve_optimizer,
-        _resolve_progressbar,
-    )
+class _VIOptions(NamedTuple):
+    optimizer: object
+    """Resolved PyMC optimizer, or a float learning rate for ``backend="jax"``."""
+    fit_kwargs: dict
+    progressbar: bool
 
-    return DEFAULT_LEARNING_RATE, _check_vi_convergence, _resolve_optimizer, _resolve_progressbar
+
+def _resolve_vi_options(method, optimizer, backend, fit_kwargs, progressbar) -> _VIOptions:
+    """Validate VI options once for :func:`fit_vi` and ``Forecaster``.
+
+    Idempotent: resolving an already-resolved optimizer, learning rate, or
+    hoisted progressbar returns them unchanged.
+    """
+    if backend not in (None, "pytensor", "jax"):
+        msg = f"unknown VI backend {backend!r}; use None, 'pytensor', or 'jax'"
+        raise MethodResolutionError(msg)
+    kwargs = dict(fit_kwargs or {})
+    if backend == "jax":
+        if method != "advi":
+            msg = "the JAX backend currently supports method='advi' only"
+            raise MethodResolutionError(msg)
+        if optimizer is None:
+            resolved = DEFAULT_LEARNING_RATE
+        elif isinstance(optimizer, int | float) and optimizer > 0:
+            resolved = float(optimizer)
+        else:
+            msg = "the JAX backend requires optimizer=None or a positive learning rate"
+            raise MethodResolutionError(msg)
+        if kwargs:
+            msg = "fit_kwargs are not supported by the JAX backend"
+            raise MethodResolutionError(msg)
+    else:
+        resolved = _resolve_optimizer(optimizer)
+    return _VIOptions(resolved, kwargs, _resolve_progressbar(progressbar, kwargs, "fit_kwargs"))
 
 
 def fit_vi(
@@ -83,47 +194,27 @@ def fit_vi(
     model=None,
 ) -> FitResult:
     """Fit ``model_fn`` (or an already-built ``model``) with variational inference."""
-    default_lr, check_convergence, resolve_optimizer, resolve_progressbar = _vi_helpers()
-    kwargs = dict(fit_kwargs or {})
-    progressbar = resolve_progressbar(progressbar, kwargs, "fit_kwargs")
-    if backend not in (None, "pytensor", "jax"):
-        msg = f"unknown VI backend {backend!r}; use None, 'pytensor', or 'jax'"
-        raise MethodResolutionError(msg)
+    options = _resolve_vi_options(method, optimizer, backend, fit_kwargs, progressbar)
+    fitted = _training_model(model, model_fn, data, covariates)
     if backend == "jax":
-        if method != "advi":
-            msg = "the JAX backend currently supports method='advi' only"
-            raise MethodResolutionError(msg)
-        if optimizer is None:
-            learning_rate = default_lr
-        elif isinstance(optimizer, int | float) and optimizer > 0:
-            learning_rate = float(optimizer)
-        else:
-            msg = "the JAX backend requires optimizer=None or a positive learning rate"
-            raise MethodResolutionError(msg)
-        if kwargs:
-            msg = "fit_kwargs are not supported by the JAX backend"
-            raise MethodResolutionError(msg)
         from pymc_forecast.jax_backend import fit_advi_jax
 
-        fitted = _training_model(model, model_fn, data, covariates)
         approx = fit_advi_jax(
             fitted,
             num_steps=num_steps,
-            learning_rate=learning_rate,
+            learning_rate=options.optimizer,
             random_seed=random_seed,
         )
     else:
-        obj_optimizer = resolve_optimizer(optimizer)
-        fitted = _training_model(model, model_fn, data, covariates)
         try:
             approx = pm.fit(
                 n=num_steps,
                 method=method,
                 model=fitted,
                 random_seed=random_seed,
-                obj_optimizer=obj_optimizer,
-                progressbar=progressbar,
-                **kwargs,
+                obj_optimizer=options.optimizer,
+                progressbar=options.progressbar,
+                **options.fit_kwargs,
             )
         except KeyError as err:
             msg = (
@@ -132,7 +223,7 @@ def fit_vi(
             )
             raise MethodResolutionError(msg) from err
     losses = np.asarray(approx.hist)
-    check_convergence(losses, num_steps)
+    _check_vi_convergence(losses, num_steps)
     return FitResult(idata=None, approx=approx, losses=losses, method=method)
 
 
@@ -151,8 +242,6 @@ def fit_mcmc(
     model=None,
 ) -> FitResult:
     """Fit ``model_fn`` (or an already-built ``model``) with MCMC."""
-    from pymc_forecast.forecaster import _resolve_progressbar
-
     kwargs = dict(sample_kwargs or {})
     progressbar = _resolve_progressbar(progressbar, kwargs, "sample_kwargs")
     fitted = _training_model(model, model_fn, data, covariates)
@@ -180,12 +269,10 @@ def fit_pathfinder(
     model=None,
 ) -> FitResult:
     """Fit ``model_fn`` (or an already-built ``model``) with Pathfinder."""
-    from pymc_forecast.forecaster import _resolve_progressbar
-
     try:
         from pymc_extras import fit_pathfinder as _fit_pathfinder
     except ImportError as err:
-        raise OptionalDependencyError("pymc-extras", "extras", "PathfinderForecaster") from err
+        raise OptionalDependencyError("pymc-extras", "extras", "Pathfinder inference") from err
     kwargs = dict(pathfinder_kwargs or {})
     progressbar = _resolve_progressbar(progressbar, kwargs, "pathfinder_kwargs")
     fitted = _training_model(model, model_fn, data, covariates)

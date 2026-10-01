@@ -15,12 +15,12 @@ from example_models import (
 )
 
 from pymc_forecast.exceptions import AlignmentError, MethodResolutionError, NotFittedError
+from pymc_forecast.fit import _check_vi_convergence
 from pymc_forecast.forecaster import (
     BaseForecaster,
     Forecaster,
     HMCForecaster,
     PathfinderForecaster,
-    _check_vi_convergence,
 )
 from pymc_forecast.model import Horizon, predict
 
