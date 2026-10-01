@@ -1,12 +1,12 @@
 """Interop with the pymc-extras ``Prior`` API: declarative, user-injectable priors.
 
-A pymc-extras :class:`~pymc_extras.prior.Prior` is accepted anywhere the model
-primitives take a factory callable, so priors live as inspectable data on the
+``innovations`` and ``predict`` accept a pymc-extras
+:class:`~pymc_extras.prior.Prior`, so priors live as inspectable data on the
 model object instead of inside lambdas::
 
     from pymc_extras.prior import Prior
 
-    drift = time_series(h, "drift", Prior("Normal", mu=0, sigma=0.1))
+    drift = innovations(h, "drift", Prior("Normal", mu=0, sigma=0.1))
     predict(h, Prior("Normal", sigma=Prior("HalfNormal", sigma=1)), pt.cumsum(drift))
 
 The adapters preserve the package's replay mechanism: nested hyper-priors
@@ -46,7 +46,7 @@ class PriorConfig:
     Subclasses declare their defaults in :attr:`default_priors`; callers
     override any subset with the ``priors=`` constructor argument, and the
     model body reads the effective mapping from :attr:`prior_config` — e.g.
-    ``self.time_series("drift", self.prior_config["drift"])`` — or creates a
+    ``self.innovations("drift", self.prior_config["drift"])`` — or creates a
     standalone variable with :meth:`create_prior`. Mixed into
     :class:`~pymc_forecast.model.ForecastingModel` and
     :class:`~pymc_forecast.statespace.StatespaceModel`.

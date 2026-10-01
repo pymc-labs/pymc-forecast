@@ -42,7 +42,9 @@ forecast_draws = idata["predictions"]["forecast"]  # dims: (chain, draw, time_fu
 
 # score against the held-out weeks (aligned by dim name, not axis position)
 truth = test.to_xarray().rename({"index": "time_future"})
-print(evaluate_forecast(forecast_draws, truth))  # {'mae': ..., 'rmse': ..., 'crps': ..., 'coverage': ...}
+print(
+    evaluate_forecast(forecast_draws, truth)
+)  # {'mae': ..., 'rmse': ..., 'crps': ..., 'coverage': ...}
 
 
 # rolling-origin backtest over the whole series
