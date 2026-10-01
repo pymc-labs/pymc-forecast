@@ -378,13 +378,14 @@ class TestFixedPosterior:
 
     def test_vi_posterior_can_be_drawn_in_host_batches(self, fc, monkeypatch):
         calls = []
-        draw = fc._draw_posterior
+        sample = fc.approx.sample
 
-        def record(size, random_seed=None):
+        def record(*args, draws=None, random_seed=None, **kwargs):
+            size = draws if draws is not None else args[0]
             calls.append(size)
-            return draw(size, random_seed)
+            return sample(*args, draws=draws, random_seed=random_seed, **kwargs)
 
-        monkeypatch.setattr(fc, "_draw_posterior", record)
+        monkeypatch.setattr(fc.approx, "sample", record)
         posterior = fc.draw_posterior(23, random_seed=SEED, batch_size=7)
 
         assert calls == [7, 7, 7, 2]

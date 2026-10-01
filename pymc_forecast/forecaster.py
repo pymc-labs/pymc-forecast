@@ -32,6 +32,12 @@ from pymc_forecast.exceptions import (
     NotFittedError,
     OptionalDependencyError,
 )
+from pymc_forecast.fit import (
+    draw_posterior as draw_posterior_result,
+    fit_mcmc,
+    fit_pathfinder,
+    fit_vi,
+)
 from pymc_forecast.model import build_model
 from pymc_forecast.prediction import (
     forecast as _forecast,
@@ -186,6 +192,12 @@ class BaseForecaster(abc.ABC):
             Pathfinder) thin it once and do not need this memory knob.
         """
         self._require_fitted()
+        result = getattr(self, "_fit_result", None)
+        if result is not None:
+            return draw_posterior_result(
+                result, num_samples, random_seed, batch_size=batch_size
+            )
+        # Stubs and custom adapters that only implement ``_draw_posterior``.
         if batch_size is not None and batch_size <= 0:
             msg = f"batch_size must be positive, got {batch_size}"
             raise ValueError(msg)
@@ -194,9 +206,6 @@ class BaseForecaster(abc.ABC):
         if batch_size >= num_samples:
             return self._draw_posterior(num_samples, random_seed)
 
-        # Passing one Generator through all calls gives every chunk a fresh,
-        # deterministic child seed without mutating global NumPy state. PyMC's
-        # legacy RandomState is kept as-is because ``default_rng`` cannot wrap it.
         rng = (
             random_seed
             if isinstance(random_seed, np.random.RandomState)
@@ -548,36 +557,22 @@ class Forecaster(BaseForecaster):
         super().__init__(model_fn, data, covariates, random_seed=random_seed)
 
     def _fit(self, random_seed) -> None:
-        if self._backend == "jax":
-            from pymc_forecast.jax_backend import fit_advi_jax
-
-            self.approx = fit_advi_jax(
-                self.model,
-                num_steps=self._num_steps,
-                learning_rate=self._learning_rate,
-                random_seed=random_seed,
-            )
-            self.losses = self.approx.hist
-            _check_vi_convergence(self.losses, self._num_steps)
-            return
-        try:
-            self.approx = pm.fit(
-                n=self._num_steps,
-                method=self._method,
-                model=self.model,
-                random_seed=random_seed,
-                obj_optimizer=self._optimizer,
-                progressbar=self._progressbar,
-                **self._fit_kwargs,
-            )
-        except KeyError as err:
-            msg = (
-                f"unknown VI method {self._method!r}; use 'advi', 'fullrank_advi', "
-                "or a pm.fit-compatible inference object"
-            )
-            raise MethodResolutionError(msg) from err
-        self.losses = self.approx.hist
-        _check_vi_convergence(self.losses, self._num_steps)
+        optimizer = self._learning_rate if self._backend == "jax" else self._optimizer
+        result = fit_vi(
+            self.model_fn,
+            method=self._method,
+            optimizer=optimizer,
+            backend=self._backend,
+            num_steps=self._num_steps,
+            random_seed=random_seed,
+            progressbar=self._progressbar,
+            fit_kwargs=self._fit_kwargs,
+            model=self.model,
+        )
+        self._fit_result = result
+        self.approx = result.approx
+        self.losses = result.losses
+        self.idata = result.idata
 
     def _draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
         """Draw ``num_samples`` posterior samples from the approximation."""
@@ -633,16 +628,21 @@ class HMCForecaster(BaseForecaster):
         super().__init__(model_fn, data, covariates, random_seed=random_seed)
 
     def _fit(self, random_seed) -> None:
-        self.idata = pm.sample(
+        result = fit_mcmc(
+            self.model_fn,
             draws=self._draws,
             tune=self._tune,
             chains=self._chains,
             nuts_sampler=self._nuts_sampler,
-            model=self.model,
             random_seed=random_seed,
             progressbar=self._progressbar,
-            **self._sample_kwargs,
+            sample_kwargs=self._sample_kwargs,
+            model=self.model,
         )
+        self._fit_result = result
+        self.approx = result.approx
+        self.losses = result.losses
+        self.idata = result.idata
 
     def _draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
         """Subsample ``num_samples`` draws from the MCMC posterior."""
@@ -690,16 +690,17 @@ class PathfinderForecaster(BaseForecaster):
         super().__init__(model_fn, data, covariates, random_seed=random_seed)
 
     def _fit(self, random_seed) -> None:
-        try:
-            from pymc_extras import fit_pathfinder
-        except ImportError as err:
-            raise OptionalDependencyError("pymc-extras", "extras", "PathfinderForecaster") from err
-        self.idata = fit_pathfinder(
-            model=self.model,
+        result = fit_pathfinder(
+            self.model_fn,
             random_seed=random_seed,
             progressbar=self._progressbar,
-            **self._pathfinder_kwargs,
+            pathfinder_kwargs=self._pathfinder_kwargs,
+            model=self.model,
         )
+        self._fit_result = result
+        self.approx = result.approx
+        self.losses = result.losses
+        self.idata = result.idata
 
     def _draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
         """Subsample ``num_samples`` draws from the Pathfinder posterior."""

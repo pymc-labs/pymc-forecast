@@ -32,6 +32,13 @@ from pymc_forecast.exceptions import (
     PymcForecastError,
 )
 from pymc_forecast.features import fourier_features, periodic_repeat
+from pymc_forecast.fit import (
+    FitResult,
+    draw_posterior,
+    fit_mcmc,
+    fit_pathfinder,
+    fit_vi,
+)
 from pymc_forecast.forecaster import (
     Forecaster,
     HMCForecaster,
@@ -93,6 +100,7 @@ __all__ = [
     "BacktestResult",
     "BacktestWindowError",
     "Forecaster",
+    "FitResult",
     "ForecastingModel",
     "HMCForecaster",
     "Horizon",
@@ -114,6 +122,7 @@ __all__ = [
     "concat_time_index",
     "conditional_mvn",
     "crps_empirical",
+    "draw_posterior",
     "eval_coverage",
     "eval_crps",
     "eval_interval_score",
@@ -123,6 +132,9 @@ __all__ = [
     "evaluate_forecast",
     "extend_time_index",
     "forecast",
+    "fit_mcmc",
+    "fit_pathfinder",
+    "fit_vi",
     "fourier_features",
     "innovations",
     "make_mase",
