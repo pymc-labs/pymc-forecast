@@ -38,7 +38,7 @@ from pymc_forecast.forecaster import (
     PathfinderForecaster,
 )
 from pymc_forecast.gaussian import conditional_mvn, predict_mvn
-from pymc_forecast.markov import markov_time_series
+from pymc_forecast.markov import markov_series
 from pymc_forecast.metrics import (
     DEFAULT_METRICS,
     crps_empirical,
@@ -126,7 +126,7 @@ __all__ = [
     "fourier_features",
     "innovations",
     "make_mase",
-    "markov_time_series",
+    "markov_series",
     "null_covariates",
     "periodic_repeat",
     "predict",

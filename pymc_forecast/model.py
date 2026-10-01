@@ -454,6 +454,20 @@ class ForecastingModel(PriorConfig, abc.ABC):
             dims=dims,
         )
 
+    def markov_series(self, name, init, transition, *, params=(), xs=None, dims=()):
+        """Bound :func:`~pymc_forecast.markov.markov_series` using this build's horizon."""
+        from pymc_forecast.markov import markov_series
+
+        return markov_series(
+            self.horizon,
+            name,
+            init,
+            transition,
+            params=params,
+            xs=xs,
+            dims=dims,
+        )
+
     def __call__(self, covariates, data=None) -> None:
         """Run the model body with the horizon bound (used by :func:`build_model`)."""
         self._horizon = Horizon.from_data(covariates, data)

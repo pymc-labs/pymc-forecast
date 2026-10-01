@@ -161,7 +161,7 @@ def ssoe(
     Notes
     -----
     This is an observation-driven filter, not a latent Markov process. For
-    sampled hidden states use :func:`~pymc_forecast.markov.markov_time_series`;
+    sampled hidden states use :func:`~pymc_forecast.markov.markov_series`;
     for linear-Gaussian hidden states consider the statespace backend.
     """
     values, dims = _history(h, y, dims)

@@ -2,7 +2,7 @@
 
 Statespace structural models (level/trend, seasonality, cycles, AR, regression;
 SARIMAX; VARMAX) cover the linear-Gaussian slice of what
-:func:`~pymc_forecast.markov.markov_time_series` is used for — with
+:func:`~pymc_forecast.markov.markov_series` is used for — with
 Kalman-filter marginalization instead of sampling per-step latents, which
 usually gives better posteriors *and* faster sampling.
 

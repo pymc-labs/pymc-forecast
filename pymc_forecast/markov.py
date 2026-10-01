@@ -31,7 +31,7 @@ from pymc_forecast.data import FUTURE_DIM, TIME_DIM
 from pymc_forecast.exceptions import HorizonError
 from pymc_forecast.model import Horizon
 
-__all__ = ["markov_time_series"]
+__all__ = ["markov_series"]
 
 Transition = Callable[..., pt.TensorVariable]
 """``(z_prev, *params) -> dist`` (or ``(z_prev, x_t, *params) -> dist`` with
@@ -77,7 +77,7 @@ def _make_dist(transition: Transition, n_steps: int, xs_slice: np.ndarray | None
     return dist_fn
 
 
-def markov_time_series(
+def markov_series(
     h: Horizon,
     name: str,
     init,
@@ -125,7 +125,7 @@ def markov_time_series(
         the full horizon.
     """
     if h.future > 0 and h.data is None:
-        msg = "markov_time_series requires observed data when forecasting"
+        msg = "markov_series requires observed data when forecasting"
         raise HorizonError(msg)
 
     xs_pre = xs_fut = None
