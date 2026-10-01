@@ -329,8 +329,28 @@ def test_predict_four_argument_factory_still_receives_name_latent_dims_observed(
     assert tuple(seen[1][1].shape.eval()) == (future.size,)
 
 
-def test_expand_dist_depends_on_change_dist_size():
-    from pymc_forecast._dist import expand_dist
+def test_innovations_broadcasts_dist_parameters_over_the_series_dim():
+    time, future, series = np.arange(6), np.arange(6, 10), ["a", "b", "c"]
+    sigma = np.array([0.1, 1.0, 5.0])
+    h = Horizon(data=None, time=time, time_future=future)
+    coords = {"time": time, "time_future": future, "series": series}
+    point = {"z": np.ones((6, 3)), "z_future": np.ones((4, 3))}
+    with pm.Model(coords=coords) as via_innovations:
+        innovations(h, "z", pm.Normal.dist(0.0, sigma), dims=("series",))
+    with pm.Model(coords=coords) as via_named:
+        pm.Normal("z", 0.0, sigma, dims=("time", "series"))
+        pm.Normal("z_future", 0.0, sigma, dims=("time_future", "series"))
+    np.testing.assert_allclose(
+        via_innovations.compile_logp()(point), via_named.compile_logp()(point)
+    )
 
-    expanded = expand_dist(pm.Normal.dist(0.0, 1.0), (4,))
-    assert tuple(expanded.shape.eval()) == (4,)
+
+def test_innovations_accepts_multivariate_dist_when_series_count_equals_horizon():
+    time, future, series = np.arange(6), np.arange(6, 8), ["a", "b"]
+    h = Horizon(data=None, time=time, time_future=future)
+    with pm.Model(coords={"time": time, "time_future": future, "series": series}) as model:
+        innovations(h, "z", pm.MvNormal.dist(np.zeros(2), np.eye(2)), dims=("series",))
+    assert model.named_vars_to_dims["z"] == ("time", "series")
+    assert model.named_vars_to_dims["z_future"] == ("time_future", "series")
+    assert tuple(model["z"].eval().shape) == (6, 2)
+    assert tuple(model["z_future"].eval().shape) == (2, 2)

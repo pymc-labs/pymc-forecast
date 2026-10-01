@@ -24,7 +24,7 @@ import pymc as pm
 import pytensor.tensor as pt
 import xarray as xr
 
-from pymc_forecast._dist import expand_dist
+from pymc_forecast._dist import expand_dist, is_dist
 from pymc_forecast.data import (
     FUTURE_DIM,
     TIME_DIM,
@@ -148,22 +148,6 @@ def _segment_shape(dims: tuple[str, ...]) -> tuple:
         raise HorizonError(msg) from exc
 
 
-def _assert_dist_has_no_time_axis(dist: pt.TensorVariable) -> None:
-    """Reject a ``.dist()`` that already carries the time axis this helper owns."""
-    model = pm.modelcontext(None)
-    time_lengths = [
-        len(model.coords[dim])
-        for dim in (TIME_DIM, FUTURE_DIM)
-        if model.coords.get(dim) is not None
-    ]
-    if any(isinstance(length, int) and length in time_lengths for length in dist.type.shape):
-        msg = (
-            "innovations owns the time axis; a .dist() that already has a "
-            "time dimension is not accepted"
-        )
-        raise HorizonError(msg)
-
-
 def innovations(
     h: Horizon,
     name: str,
@@ -175,10 +159,13 @@ def innovations(
 
     ``dist`` is a pymc-extras ``Prior`` or an unnamed ``.dist()`` tensor.
     A ``Prior`` follows :func:`~pymc_forecast.priors.prior_rv_factory`,
-    including one shared draw of nested hyper-priors. A ``.dist()`` is
-    expanded to the segment shape and registered as ``name`` with dims
-    ``("time", *dims)`` and, when forecasting, ``{name}_future`` with dims
-    ``("time_future", *dims)``.
+    including one shared draw of nested hyper-priors.
+    A ``.dist()`` is resized to ``("time", *dims)`` and registered as ``name``,
+    plus ``("time_future", *dims)`` as ``{name}_future`` when forecasting.
+    Its parameters broadcast against the trailing ``dims`` (e.g. a
+    per-series scale), and a multivariate dist's support fills the last
+    ``dims``. The time axis belongs to this helper, so a ``.dist()`` with
+    more axes than ``dims`` is rejected.
 
     Returns the latent over the full horizon, concatenated on axis 0. When
     ``h.future == 0`` the forecast suffix is omitted.
@@ -191,20 +178,19 @@ def innovations(
         suffix = rv_fn(f"{name}_future", (FUTURE_DIM, *dims))
         return pt.concatenate([prefix, suffix], axis=0)
 
-    if not isinstance(dist, pt.TensorVariable) or dist.owner is None:
+    if not is_dist(dist):
         msg = "innovations expects a Prior or an unnamed .dist() tensor"
         raise HorizonError(msg)
-    _assert_dist_has_no_time_axis(dist)
     model = pm.modelcontext(None)
     prefix = model.register_rv(
-        expand_dist(dist, _segment_shape((TIME_DIM, *dims))),
+        expand_dist(dist, _segment_shape((TIME_DIM, *dims)), owner="innovations"),
         name,
         dims=(TIME_DIM, *dims),
     )
     if h.future == 0:
         return prefix
     suffix = model.register_rv(
-        expand_dist(dist, _segment_shape((FUTURE_DIM, *dims))),
+        expand_dist(dist, _segment_shape((FUTURE_DIM, *dims)), owner="innovations"),
         f"{name}_future",
         dims=(FUTURE_DIM, *dims),
     )

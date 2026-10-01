@@ -351,3 +351,30 @@ def test_mvnormal_dist_noise_registers_series_support():
         )
     assert model.named_vars_to_dims["eps_future"] == ("time_future", "series")
     assert tuple(model["eps_future"].eval().shape) == (2, 2)
+
+
+def test_per_series_scale_dist_noise_broadcasts_over_series():
+    """A ``.dist()`` with a per-series scale maps it onto the series dim."""
+    y = xr.DataArray(
+        [[1.0, 2.0], [3.0, 4.0]],
+        dims=("time", "series"),
+        coords={"series": ["a", "b"], "time": [0, 1]},
+    )
+    h = Horizon(y, y.time.values, np.arange(2, 5))
+    sigma = np.array([0.5, 2.0])
+    with pm.Model(
+        coords={"time": h.time, "time_future": h.time_future, "series": y.series.values}
+    ) as model:
+        ssoe(
+            h,
+            "eps",
+            None,
+            np.zeros(2),
+            lambda state, x: state,
+            lambda state, y, error, x: state,
+            pm.Normal.dist(0.0, sigma),
+        )
+    assert model.named_vars_to_dims["eps_future"] == ("time_future", "series")
+    point = np.ones((3, 2))
+    expected = pm.logp(pm.Normal.dist(0.0, sigma), point).sum().eval()
+    np.testing.assert_allclose(model.compile_logp()({"eps_future": point}), expected)

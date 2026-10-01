@@ -17,10 +17,10 @@ breaking change, made only in a minor release and called out here.
   `0.2.0`. Prediction schema names did not change.
   - Model signature `(h, covariates)` to `(covariates, data=None)`.
   - `ForecastingModel.model(self, h, covariates)` to `model(self, covariates, data=None)`.
-  - `time_series` removed. Use `innovations`. A `.dist()` or a pymc-extras `Prior`, not an `RVFactory`.
+  - `time_series` removed. Use `innovations`. A `.dist()` or a pymc-extras `Prior`, not an `RVFactory`. A `.dist()`'s parameters broadcast against `("time", *dims)`, so per-series scales and multivariate dists work.
   - `markov_time_series` removed. Use `markov_series`. No `advance`.
   - `Horizon.from_arrays` removed. Use `Horizon.from_data`.
-  - `ssoe(h, name, init, mean, update, noise_fn, *, y=..., params=...)` becomes `ssoe(h, name, y, init, mean, update, noise, xs=None, *, params=..., dims=...)`. `y=None` still means `h.data`. `noise` is a `.dist()` or a `Prior`.
+  - `ssoe(h, name, init, mean, update, noise_fn, *, y=..., params=...)` becomes `ssoe(h, name, y, init, mean, update, noise, xs=None, *, params=..., dims=...)`. `y=None` still means `h.data`. `noise` is a `.dist()` or a `Prior`. Its parameters broadcast against `("time_future", *dims)`.
   - `predict`'s second argument is no longer only a 4-argument factory. A 1-argument `segment_latent -> .dist()` callable is accepted. A zero-centered `.dist()` is accepted for `Normal` and `StudentT`.
   - Functional fitters: `fit_vi`, `fit_mcmc`, `fit_pathfinder`, `FitResult`, `draw_posterior`. The classes call those functions. Like the classes, the fitters drop covariate rows past the training window. Constructors and attributes did not change.
 

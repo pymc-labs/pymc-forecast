@@ -18,7 +18,7 @@ import xarray as xr
 from pymc.pytensorf import collect_default_updates
 from pytensor.raise_op import Assert
 
-from pymc_forecast._dist import expand_dist
+from pymc_forecast._dist import expand_dist, is_dist
 from pymc_forecast.data import FUTURE_DIM, TIME_DIM
 from pymc_forecast.exceptions import AlignmentError, HorizonError
 from pymc_forecast.model import Horizon
@@ -99,9 +99,7 @@ def _inputs(h: Horizon, xs: xr.DataArray | None):
 
 def _accept_noise(noise) -> None:
     """Reject an ``RVFactory``. ``noise`` is a ``.dist()`` or a ``Prior``."""
-    if is_prior_like(noise):
-        return
-    if isinstance(noise, pt.TensorVariable) and noise.owner is not None:
+    if is_prior_like(noise) or is_dist(noise):
         return
     raise HorizonError("ssoe noise must be a .dist() or a Prior, not an RVFactory")
 
@@ -117,9 +115,9 @@ def _future_noise(name: str, noise, dims: tuple[str, ...]) -> pt.TensorVariable:
     except KeyError as exc:
         msg = f"ssoe requires model coord {exc.args[0]!r}"
         raise HorizonError(msg) from exc
-    # expand_dist prepends this size; support axes already belong to the dist.
-    batch_shape = shape[: len(shape) - noise.owner.op.ndim_supp]
-    return model.register_rv(expand_dist(noise, batch_shape), f"{name}_future", dims=future_dims)
+    return model.register_rv(
+        expand_dist(noise, shape, owner="ssoe"), f"{name}_future", dims=future_dims
+    )
 
 
 def ssoe(
@@ -168,9 +166,10 @@ def ssoe(
         Unnamed ``.dist()`` or pymc-extras ``Prior`` for independent,
         zero-centered per-step future errors, expanded and registered as
         ``f"{name}_future"`` only. An ``RVFactory`` or other callable is
-        rejected. Errors may be correlated across the observation dimensions,
-        using e.g. ``pm.MvNormal.dist``. In-sample errors are residuals, not
-        random variables.
+        rejected. Parameters broadcast against ``("time_future", *dims)``, so a
+        per-series scale works. Errors may be correlated across the
+        observation dimensions, using e.g. ``pm.MvNormal.dist``. In-sample
+        errors are residuals, not random variables.
     xs
         Optional labeled inputs spanning the full horizon. The time dimension
         is selected by name, and coordinates are checked. Future inputs must
