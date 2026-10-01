@@ -122,7 +122,8 @@ def _observed_frame(data: xr.DataArray):
 
 
 _FIT_DATA_GROUPS = ("observed_data", "constant_data")
-"""Fit-result groups pymc-extras reads back to rebuild the fit coords."""
+"""Fit-result groups pymc-extras reads back to rebuild the fit coords, observed
+data, and exogenous inputs."""
 
 
 def _posterior_like(fit_result, posterior: xr.Dataset):
@@ -131,7 +132,8 @@ def _posterior_like(fit_result, posterior: xr.Dataset):
     The container is a ``DataTree`` or ``arviz.InferenceData``, depending on the
     pymc/arviz generation. By construction that is the idata flavor the installed
     statespace methods accept. The fit's data groups travel along because recent
-    pymc-extras rebuilds the fit coords from them before forecasting.
+    pymc-extras rebuilds the fit coords, observed data, and exogenous inputs
+    from them before forecasting.
     """
     groups = {"posterior": posterior}
     for name in _FIT_DATA_GROUPS:
@@ -198,8 +200,9 @@ class StatespaceForecaster(HMCForecaster):
         accepted here for compatibility, but the direct argument is preferred
         (passing both raises).
     build_kwargs
-        Extra keyword arguments for ``build_statespace_graph``, such as
-        ``mvn_method`` for the likelihood decomposition.
+        Extra keyword arguments for ``build_statespace_graph``. Which keywords
+        exist depends on the installed pymc-extras: older releases accept
+        e.g. ``mvn_method``; 0.15.1 accepts none.
     forecast_kwargs
         Extra keyword arguments for ``PyMCStateSpace.forecast``, such as
         ``filter_output`` or ``mvn_method``. Horizon, scenario, seed,
