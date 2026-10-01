@@ -329,6 +329,19 @@ def test_predict_four_argument_factory_still_receives_name_latent_dims_observed(
     assert tuple(seen[1][1].shape.eval()) == (future.size,)
 
 
+def test_predict_four_argument_factory_dispatch_ignores_parameter_names():
+    time = np.arange(4)
+    data = xr.DataArray(np.ones(time.size), dims="time", coords={"time": time})
+    h = Horizon(data=data, time=time)
+    with pm.Model(coords={"time": time}) as model:
+        predict(
+            h,
+            lambda n, mu, d, obs: pm.Normal(n, mu, 1.0, dims=d, observed=obs),
+            pt.zeros(time.size),
+        )
+    assert [rv.name for rv in model.observed_RVs] == ["obs"]
+
+
 def test_innovations_broadcasts_dist_parameters_over_the_series_dim():
     time, future, series = np.arange(6), np.arange(6, 10), ["a", "b", "c"]
     sigma = np.array([0.1, 1.0, 5.0])

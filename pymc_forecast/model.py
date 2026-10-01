@@ -211,12 +211,17 @@ _DIST_LOC_ERROR = (
 )
 
 
-def _has_observed_parameter(fn) -> bool:
+def _is_observation_factory(fn) -> bool:
+    """Whether ``fn`` takes the 4-argument ``(name, latent, dims, observed)`` form.
+
+    Decided by arity, not parameter names, so factories written for the
+    original API keep working whatever they call their arguments.
+    """
     try:
-        signature = inspect.signature(fn)
+        inspect.signature(fn).bind(None, None, None, None)
     except (TypeError, ValueError):
         return False
-    return "observed" in signature.parameters
+    return True
 
 
 def _is_zero_constant(var) -> bool:
@@ -252,7 +257,7 @@ def _register_unnamed(name: str, dist, dims: tuple[str, ...], observed) -> pt.Te
 
 def _emit_observation(obs, name: str, segment, dims: tuple[str, ...], observed):
     """Dispatch one observation segment. The 4-argument factory path is unchanged."""
-    if callable(obs) and _has_observed_parameter(obs):
+    if callable(obs) and _is_observation_factory(obs):
         return obs(name, segment, dims, observed)
     if callable(obs):
         return _register_unnamed(name, obs(segment), dims, observed)
@@ -304,8 +309,9 @@ def predict(
     obs
         Observation specification, dispatched in order: a pymc-extras
         ``Prior`` (``mu`` left unset; nested hyper-priors shared across
-        segments), a callable whose signature has an ``observed`` parameter
-        (``(name, latent, dims, observed) -> RV``), any other callable
+        segments), a callable that accepts four positional arguments
+        (``(name, latent, dims, observed) -> RV``; parameter names do not
+        matter), any other callable
         (``segment_latent ->`` unnamed ``.dist()``, called once per segment),
         or a zero-centered ``pm.Normal.dist`` / ``pm.StudentT.dist`` whose
         location is replaced by the segment latent. Any other dist, or a
