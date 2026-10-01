@@ -32,12 +32,13 @@ from pymc_forecast.exceptions import (
     NotFittedError,
 )
 from pymc_forecast.fit import (
-    draw_posterior as draw_posterior_result,
-)
-from pymc_forecast.fit import (
+    _training_inputs,
     fit_mcmc,
     fit_pathfinder,
     fit_vi,
+)
+from pymc_forecast.fit import (
+    draw_posterior as draw_posterior_result,
 )
 from pymc_forecast.model import build_model
 from pymc_forecast.prediction import (
@@ -129,13 +130,7 @@ class BaseForecaster(abc.ABC):
             Seed for the fit; defaults to the constructor's ``random_seed``.
         """
         self._is_fitted = False
-        self._data = as_dataarray(data, role="data")
-        if covariates is None:
-            cov = null_covariates(self._data[TIME_DIM].values)
-        else:
-            cov = as_dataarray(covariates, role="covariates")
-            cov = cov.isel({TIME_DIM: slice(None, self._data.sizes[TIME_DIM])})
-        self._covariates = cov
+        self._data, self._covariates = _training_inputs(data, covariates)
         self.model = self._build_model()
         self._fit(self._random_seed if random_seed is None else random_seed)
         self._is_fitted = True

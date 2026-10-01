@@ -14,6 +14,7 @@ import numpy as np
 import pymc as pm
 import xarray as xr
 
+from pymc_forecast.data import TIME_DIM, as_dataarray, null_covariates
 from pymc_forecast.exceptions import MethodResolutionError, OptionalDependencyError
 from pymc_forecast.model import build_model
 from pymc_forecast.prediction import posterior_dataset, thin_draws
@@ -35,16 +36,25 @@ class FitResult:
     method: str
 
 
+def _training_inputs(data, covariates) -> tuple[xr.DataArray, xr.DataArray]:
+    """Normalize training inputs and cut covariates to the observed window.
+
+    Covariate rows past the data would give the training model a forecast
+    horizon, registering ``{name}_future`` latents as free variables that the
+    fit then puts into the posterior.
+    """
+    data_da = as_dataarray(data, role="data")
+    if covariates is None:
+        return data_da, null_covariates(data_da[TIME_DIM].values)
+    cov_da = as_dataarray(covariates, role="covariates")
+    return data_da, cov_da.isel({TIME_DIM: slice(None, data_da.sizes[TIME_DIM])})
+
+
 def _training_model(model, model_fn, data, covariates):
     """Return ``model`` unchanged, or build it once from the training inputs."""
     if model is not None:
         return model
-    if covariates is None:
-        from pymc_forecast.data import TIME_DIM, as_dataarray, null_covariates
-
-        data = as_dataarray(data, role="data")
-        covariates = null_covariates(data[TIME_DIM].values)
-    return build_model(model_fn, data, covariates)
+    return build_model(model_fn, *_training_inputs(data, covariates))
 
 
 def _vi_helpers():

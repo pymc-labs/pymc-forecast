@@ -22,7 +22,7 @@ breaking change, made only in a minor release and called out here.
   - `Horizon.from_arrays` removed. Use `Horizon.from_data`.
   - `ssoe(h, name, init, mean, update, noise_fn, *, y=..., params=...)` becomes `ssoe(h, name, y, init, mean, update, noise, xs=None, *, params=..., dims=...)`. `y=None` still means `h.data`. `noise` is a `.dist()` or a `Prior`.
   - `predict`'s second argument is no longer only a 4-argument factory. A 1-argument `segment_latent -> .dist()` callable is accepted. A zero-centered `.dist()` is accepted for `Normal` and `StudentT`.
-  - Functional fitters: `fit_vi`, `fit_mcmc`, `fit_pathfinder`, `FitResult`, `draw_posterior`. The classes call those functions. Constructors and attributes did not change.
+  - Functional fitters: `fit_vi`, `fit_mcmc`, `fit_pathfinder`, `FitResult`, `draw_posterior`. The classes call those functions. Like the classes, the fitters drop covariate rows past the training window. Constructors and attributes did not change.
 
 - Add `ssoe` and `SSOEResult` for observation-driven recursions with named inputs, shared training/forecast updates, and fresh future errors under posterior replay.
 - Add executed ARMA, intermittent-demand and inference-comparison notebooks;
