@@ -23,6 +23,9 @@ import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
 import xarray as xr
+from pytensor.tensor.basic import get_underlying_scalar_constant_value
+from pytensor.tensor.exceptions import NotScalarConstantError
+from pytensor.tensor.random.basic import NormalRV, StudentTRV
 
 from pymc_forecast._dist import expand_dist, is_dist
 from pymc_forecast.data import (
@@ -235,27 +238,27 @@ def _is_observation_factory(fn) -> bool:
     return False
 
 
-def _is_zero_constant(var) -> bool:
-    from pytensor.graph.basic import Constant
-
-    if not isinstance(var, Constant):
+def _is_zero(var) -> bool:
+    """Whether ``var`` is a compile-time constant equal to zero everywhere."""
+    try:
+        return get_underlying_scalar_constant_value(var) == 0
+    except NotScalarConstantError:
         return False
-    return bool(np.all(np.asarray(var.data) == 0))
 
 
 def _rebuild_zero_centered(dist, latent) -> pt.TensorVariable:
-    if not isinstance(dist, pt.TensorVariable) or dist.owner is None:
+    if not is_dist(dist):
         raise HorizonError(_DIST_LOC_ERROR)
-    op_name = type(dist.owner.op).__name__
-    inputs = dist.owner.inputs
-    if op_name == "NormalRV":
-        if not _is_zero_constant(inputs[2]):
-            raise HorizonError(_DIST_LOC_ERROR)
-        return pm.Normal.dist(latent, inputs[3])
-    if op_name == "StudentTRV":
-        if not _is_zero_constant(inputs[3]):
-            raise HorizonError(_DIST_LOC_ERROR)
-        return pm.StudentT.dist(inputs[2], latent, sigma=inputs[4])
+    op = dist.owner.op
+    params = op.dist_params(dist.owner)
+    if isinstance(op, NormalRV):
+        mu, sigma = params
+        if _is_zero(mu):
+            return pm.Normal.dist(latent, sigma)
+    elif isinstance(op, StudentTRV):
+        nu, mu, sigma = params
+        if _is_zero(mu):
+            return pm.StudentT.dist(nu, latent, sigma=sigma)
     raise HorizonError(_DIST_LOC_ERROR)
 
 

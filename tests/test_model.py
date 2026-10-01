@@ -297,6 +297,21 @@ def test_predict_studentt_dist_logp_matches_named_observation():
     np.testing.assert_allclose(via_predict.compile_logp()({}), via_named.compile_logp()({}))
 
 
+def test_predict_normal_dist_with_symbolic_zero_location_is_shifted():
+    time, series = np.arange(5), ["a", "b"]
+    y = np.linspace(-1.0, 1.0, 10).reshape(5, 2)
+    latent = np.linspace(0.0, 0.4, 10).reshape(5, 2)
+    sigma = np.array([0.5, 2.0])
+    data = xr.DataArray(y, dims=("time", "series"), coords={"time": time, "series": series})
+    h = Horizon(data=data, time=time)
+    coords = {"time": time, "series": series}
+    with pm.Model(coords=coords) as via_predict:
+        predict(h, pm.Normal.dist(pt.zeros(2), sigma), pt.as_tensor(latent))
+    with pm.Model(coords=coords) as via_named:
+        pm.Normal("obs", latent, sigma, observed=y, dims=("time", "series"))
+    np.testing.assert_allclose(via_predict.compile_logp()({}), via_named.compile_logp()({}))
+
+
 def test_predict_laplace_dist_raises():
     time = np.arange(4)
     data = xr.DataArray(np.zeros(time.size), dims="time", coords={"time": time})
