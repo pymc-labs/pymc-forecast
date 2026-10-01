@@ -11,7 +11,6 @@ Construct without data to defer the fit (:meth:`~BaseForecaster.fit`).
 import abc
 from collections.abc import Mapping
 
-import numpy as np
 import pymc as pm
 import xarray as xr
 
@@ -30,15 +29,13 @@ from pymc_forecast.exceptions import (
     NotFittedError,
 )
 from pymc_forecast.fit import (
+    _draw_batched,
     _resolve_progressbar,
     _resolve_vi_options,
     _training_inputs,
     fit_mcmc,
     fit_pathfinder,
     fit_vi,
-)
-from pymc_forecast.fit import (
-    draw_posterior as draw_posterior_result,
 )
 from pymc_forecast.model import build_model
 from pymc_forecast.prediction import (
@@ -176,44 +173,12 @@ class BaseForecaster(abc.ABC):
             Pathfinder) thin it once and do not need this memory knob.
         """
         self._require_fitted()
-        result = getattr(self, "_fit_result", None)
-        if result is not None:
-            return draw_posterior_result(result, num_samples, random_seed, batch_size=batch_size)
-        # Stubs and custom adapters that only implement ``_draw_posterior``.
-        if batch_size is not None and batch_size <= 0:
-            msg = f"batch_size must be positive, got {batch_size}"
-            raise ValueError(msg)
-        if batch_size is None or not self._batch_generated_posterior:
-            return self._draw_posterior(num_samples, random_seed)
-        if batch_size >= num_samples:
-            return self._draw_posterior(num_samples, random_seed)
-
-        rng = (
-            random_seed
-            if isinstance(random_seed, np.random.RandomState)
-            else np.random.default_rng(random_seed)
-        )
-        chunks: list[xr.Dataset] = []
-        offset = 0
-        while offset < num_samples:
-            size = min(batch_size, num_samples - offset)
-            chunk = self._draw_posterior(size, rng)
-            if chunk.sizes.get("chain") != 1:
-                msg = (
-                    "generated posterior batches must have one chain; got "
-                    f"sizes {dict(chunk.sizes)}"
-                )
-                raise ValueError(msg)
-            chunk = chunk.assign_coords(draw=np.arange(offset, offset + size))
-            chunks.append(chunk)
-            offset += size
-        return xr.concat(
-            chunks,
-            dim="draw",
-            data_vars="all",
-            coords="minimal",
-            compat="override",
-            combine_attrs="override",
+        return _draw_batched(
+            self._draw_posterior,
+            num_samples,
+            random_seed,
+            batch_size=batch_size,
+            generated=self._batch_generated_posterior,
         )
 
     @abc.abstractmethod
@@ -462,7 +427,6 @@ class Forecaster(BaseForecaster):
             fit_kwargs=self._fit_kwargs,
             model=self.model,
         )
-        self._fit_result = result
         self.approx = result.approx
         self.losses = result.losses
         self.idata = result.idata
@@ -532,7 +496,6 @@ class HMCForecaster(BaseForecaster):
             sample_kwargs=self._sample_kwargs,
             model=self.model,
         )
-        self._fit_result = result
         self.approx = result.approx
         self.losses = result.losses
         self.idata = result.idata
@@ -590,7 +553,6 @@ class PathfinderForecaster(BaseForecaster):
             pathfinder_kwargs=self._pathfinder_kwargs,
             model=self.model,
         )
-        self._fit_result = result
         self.approx = result.approx
         self.losses = result.losses
         self.idata = result.idata

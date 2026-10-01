@@ -292,6 +292,43 @@ def _draw_once(result: FitResult, num_samples: int, random_seed=None) -> xr.Data
     return thin_draws(result.idata, num_samples, random_seed)
 
 
+def _draw_batched(draw, num_samples, random_seed, *, batch_size, generated) -> xr.Dataset:
+    """Call ``draw(size, seed)`` once, or in ``batch_size`` chunks when ``generated``.
+
+    One Generator threads through all chunks, so each chunk gets a fresh,
+    deterministic child seed without mutating global NumPy state. PyMC's legacy
+    ``RandomState`` passes through as-is because ``default_rng`` cannot wrap it.
+    """
+    if batch_size is not None and batch_size <= 0:
+        msg = f"batch_size must be positive, got {batch_size}"
+        raise ValueError(msg)
+    if batch_size is None or not generated or batch_size >= num_samples:
+        return draw(num_samples, random_seed)
+    rng = (
+        random_seed
+        if isinstance(random_seed, np.random.RandomState)
+        else np.random.default_rng(random_seed)
+    )
+    chunks: list[xr.Dataset] = []
+    offset = 0
+    while offset < num_samples:
+        size = min(batch_size, num_samples - offset)
+        chunk = draw(size, rng)
+        if chunk.sizes.get("chain") != 1:
+            msg = f"generated posterior batches must have one chain; got sizes {dict(chunk.sizes)}"
+            raise ValueError(msg)
+        chunks.append(chunk.assign_coords(draw=np.arange(offset, offset + size)))
+        offset += size
+    return xr.concat(
+        chunks,
+        dim="draw",
+        data_vars="all",
+        coords="minimal",
+        compat="override",
+        combine_attrs="override",
+    )
+
+
 def draw_posterior(
     result: FitResult,
     num_samples: int,
@@ -305,34 +342,10 @@ def draw_posterior(
     host-side chunks of ``batch_size``. MCMC and Pathfinder results are thinned
     once from ``idata.posterior``.
     """
-    if batch_size is not None and batch_size <= 0:
-        msg = f"batch_size must be positive, got {batch_size}"
-        raise ValueError(msg)
-    generated = result.idata is None
-    if batch_size is None or not generated or batch_size >= num_samples:
-        return _draw_once(result, num_samples, random_seed)
-
-    rng = (
-        random_seed
-        if isinstance(random_seed, np.random.RandomState)
-        else np.random.default_rng(random_seed)
-    )
-    chunks: list[xr.Dataset] = []
-    offset = 0
-    while offset < num_samples:
-        size = min(batch_size, num_samples - offset)
-        chunk = _draw_once(result, size, rng)
-        if chunk.sizes.get("chain") != 1:
-            msg = f"generated posterior batches must have one chain; got sizes {dict(chunk.sizes)}"
-            raise ValueError(msg)
-        chunk = chunk.assign_coords(draw=np.arange(offset, offset + size))
-        chunks.append(chunk)
-        offset += size
-    return xr.concat(
-        chunks,
-        dim="draw",
-        data_vars="all",
-        coords="minimal",
-        compat="override",
-        combine_attrs="override",
+    return _draw_batched(
+        lambda size, seed: _draw_once(result, size, seed),
+        num_samples,
+        random_seed,
+        batch_size=batch_size,
+        generated=result.idata is None,
     )
