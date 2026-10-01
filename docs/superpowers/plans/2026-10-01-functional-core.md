@@ -108,8 +108,7 @@ behavior.
 
 ```python
 @classmethod
-def from_data(cls, covariates: xr.DataArray, data: xr.DataArray | None) -> Horizon:
-    ...
+def from_data(cls, covariates: xr.DataArray, data: xr.DataArray | None) -> Horizon: ...
 ```
 
 Same body as today's `from_arrays`. Delete `from_arrays`. Keep `t_obs`,
@@ -124,8 +123,7 @@ def innovations(
     dist,
     *,
     dims: tuple[str, ...] = (),
-) -> pt.TensorVariable:
-    ...
+) -> pt.TensorVariable: ...
 ```
 
 `dist` is either a pymc-extras `Prior` or an unnamed `.dist()` tensor
@@ -166,8 +164,7 @@ def predict(
     *,
     expected_observation: pt.TensorVariable | None = None,
     dims: tuple[str, ...] | None = None,
-) -> None:
-    ...
+) -> None: ...
 ```
 
 Dispatch `obs` in this order:
@@ -210,8 +207,7 @@ def markov_series(
     params: Sequence = (),
     xs=None,
     dims: tuple[str, ...] = (),
-) -> pt.TensorVariable:
-    ...
+) -> pt.TensorVariable: ...
 ```
 
 Same scan behavior as `markov_time_series`. `params=` stays. `xs` stays one
@@ -232,8 +228,7 @@ def ssoe(
     *,
     params: Sequence = (),
     dims: tuple[str, ...] | None = None,
-) -> SSOEResult:
-    ...
+) -> SSOEResult: ...
 ```
 
 `y=None` uses `h.data`. `noise` is a `.dist()` or a `Prior`, expanded and
@@ -284,19 +279,51 @@ class FitResult:
     losses: np.ndarray | None
     method: str
 
-def fit_vi(model_fn, data=None, covariates=None, *, method="advi", optimizer=None,
-           backend=None, num_steps=10_000, random_seed=None, progressbar=None,
-           fit_kwargs=None) -> FitResult: ...
 
-def fit_mcmc(model_fn, data=None, covariates=None, *, draws=1000, tune=1000,
-             chains=2, nuts_sampler="pymc", random_seed=None, progressbar=None,
-             sample_kwargs=None) -> FitResult: ...
+def fit_vi(
+    model_fn,
+    data=None,
+    covariates=None,
+    *,
+    method="advi",
+    optimizer=None,
+    backend=None,
+    num_steps=10_000,
+    random_seed=None,
+    progressbar=None,
+    fit_kwargs=None,
+) -> FitResult: ...
 
-def fit_pathfinder(model_fn, data=None, covariates=None, *, random_seed=None,
-                   progressbar=None, pathfinder_kwargs=None) -> FitResult: ...
 
-def draw_posterior(result: FitResult, num_samples: int, random_seed=None, *,
-                   batch_size: int | None = None) -> xr.Dataset: ...
+def fit_mcmc(
+    model_fn,
+    data=None,
+    covariates=None,
+    *,
+    draws=1000,
+    tune=1000,
+    chains=2,
+    nuts_sampler="pymc",
+    random_seed=None,
+    progressbar=None,
+    sample_kwargs=None,
+) -> FitResult: ...
+
+
+def fit_pathfinder(
+    model_fn,
+    data=None,
+    covariates=None,
+    *,
+    random_seed=None,
+    progressbar=None,
+    pathfinder_kwargs=None,
+) -> FitResult: ...
+
+
+def draw_posterior(
+    result: FitResult, num_samples: int, random_seed=None, *, batch_size: int | None = None
+) -> xr.Dataset: ...
 ```
 
 Each fitter takes an optional already-built `model=`. When `model` is
