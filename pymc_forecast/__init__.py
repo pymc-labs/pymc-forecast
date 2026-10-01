@@ -125,6 +125,7 @@ __all__ = [
     "forecast",
     "fourier_features",
     "innovations",
+    "make_mase",
     "markov_time_series",
     "null_covariates",
     "periodic_repeat",
