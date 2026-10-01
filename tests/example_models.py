@@ -5,7 +5,7 @@ import pymc as pm
 import pytensor.tensor as pt
 import xarray as xr
 
-from pymc_forecast.model import ForecastingModel, Horizon, predict, time_series
+from pymc_forecast.model import ForecastingModel, Horizon, innovations, predict
 from pymc_forecast.statespace import StatespaceModel
 
 SEED = 20260709
@@ -20,7 +20,7 @@ def linear_model(covariates: xr.DataArray, data=None) -> None:
     mu = intercept + pt.dot(covariates.values, beta)
     predict(
         h,
-        lambda name, m, dims, observed: pm.Normal(name, m, sigma, dims=dims, observed=observed),
+        pm.Normal.dist(0.0, sigma),
         mu,
     )
 
@@ -29,12 +29,12 @@ def random_walk_model(covariates: xr.DataArray, data=None) -> None:
     """Level = cumsum of per-step drift latents; the replay workhorse."""
     h = Horizon.from_data(covariates, data)
     drift_loc = pm.Normal("drift_loc", 0.0, 1.0)
-    drift = time_series(h, "drift", lambda name, dims: pm.Normal(name, drift_loc, 0.1, dims=dims))
+    drift = innovations(h, "drift", pm.Normal.dist(drift_loc, 0.1))
     level = pt.cumsum(drift)
     sigma = pm.HalfNormal("sigma", 0.5)
     predict(
         h,
-        lambda name, m, dims, observed: pm.Normal(name, m, sigma, dims=dims, observed=observed),
+        lambda mu: pm.Normal.dist(mu, sigma),
         level,
         expected_observation=level,
     )
@@ -45,13 +45,11 @@ class RandomWalkForecastingModel(ForecastingModel):
 
     def model(self, covariates, data=None) -> None:
         drift_loc = pm.Normal("drift_loc", 0.0, 1.0)
-        drift = self.time_series(
-            "drift", lambda name, dims: pm.Normal(name, drift_loc, 0.1, dims=dims)
-        )
+        drift = self.innovations("drift", pm.Normal.dist(drift_loc, 0.1))
         sigma = pm.HalfNormal("sigma", 0.5)
         level = pt.cumsum(drift)
         self.predict(
-            lambda name, m, dims, observed: pm.Normal(name, m, sigma, dims=dims, observed=observed),
+            lambda mu: pm.Normal.dist(mu, sigma),
             level,
             expected_observation=level,
         )
@@ -61,12 +59,12 @@ def hierarchical_model(covariates: xr.DataArray, data=None) -> None:
     """Per-series intercept + shared per-step drift; data dims (time, series)."""
     h = Horizon.from_data(covariates, data)
     intercept = pm.Normal("intercept", 0.0, 2.0, dims="series")
-    drift = time_series(h, "drift", lambda name, dims: pm.Normal(name, 0.0, 0.2, dims=dims))
+    drift = innovations(h, "drift", pm.Normal.dist(0.0, 0.2))
     mu = intercept + pt.cumsum(drift)[:, None]
     sigma = pm.HalfNormal("sigma", 0.5)
     predict(
         h,
-        lambda name, m, dims, observed: pm.Normal(name, m, sigma, dims=dims, observed=observed),
+        lambda m: pm.Normal.dist(m, sigma),
         mu,
     )
 
@@ -79,7 +77,7 @@ def poisson_model(covariates: xr.DataArray, data=None) -> None:
     eta = intercept + pt.dot(covariates.values, beta)
     predict(
         h,
-        lambda name, e, dims, observed: pm.Poisson(name, pt.exp(e), dims=dims, observed=observed),
+        lambda eta: pm.Poisson.dist(pt.exp(eta)),
         eta,
         expected_observation=pt.exp(eta),
     )

@@ -117,7 +117,7 @@ class TestJAXForecasterVI:
             theta = pm.Normal("theta", 0.0, 1.0)
             predict(
                 h,
-                lambda name, mu, dims, obs: pm.Normal(name, mu, 1.0, dims=dims, observed=obs),
+                lambda name, mu, dims, observed: pm.Normal(name, mu, 1.0, dims=dims, observed=observed),
                 pt.ones(h.duration) * theta,
             )
 

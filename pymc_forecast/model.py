@@ -15,6 +15,7 @@ derived from the *coords*: ``future = len(covariates.time) - len(data.time)``.
 """
 
 import abc
+import inspect
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
@@ -30,6 +31,7 @@ from pymc_forecast.data import (
     validate_alignment,
 )
 from pymc_forecast.exceptions import HorizonError
+from pymc_forecast._dist import expand_dist
 from pymc_forecast.priors import (
     PriorConfig,
     is_prior_like,
@@ -47,8 +49,8 @@ __all__ = [
     "ForecastingModel",
     "Horizon",
     "build_model",
+    "innovations",
     "predict",
-    "time_series",
 ]
 
 OBS_VAR = "obs"
@@ -84,6 +86,7 @@ ObsFactory = Callable[..., pt.TensorVariable]
 (time on axis 0), ``dims`` the variable's dims, and ``observed`` the observed
 values (``None`` for the forecast suffix and during prior-only builds).
 """
+
 
 
 @dataclass(frozen=True)
@@ -136,48 +139,76 @@ class Horizon:
         return cls(data=data, time=cov_time[:t_obs], time_future=cov_time[t_obs:])
 
 
-def time_series(
+def _segment_shape(dims: tuple[str, ...]) -> tuple:
+    """Lengths of ``dims`` from the active model's coords."""
+    model = pm.modelcontext(None)
+    try:
+        return tuple(model.dim_lengths[dim] for dim in dims)
+    except KeyError as exc:
+        msg = f"innovations requires model coord {exc.args[0]!r}"
+        raise HorizonError(msg) from exc
+
+
+def _assert_dist_has_no_time_axis(dist: pt.TensorVariable) -> None:
+    """Reject a ``.dist()`` that already carries the time axis this helper owns."""
+    model = pm.modelcontext(None)
+    time_lengths = [
+        len(model.coords[dim])
+        for dim in (TIME_DIM, FUTURE_DIM)
+        if model.coords.get(dim) is not None
+    ]
+    if any(isinstance(length, int) and length in time_lengths for length in dist.type.shape):
+        msg = (
+            "innovations owns the time axis; a .dist() that already has a "
+            "time dimension is not accepted"
+        )
+        raise HorizonError(msg)
+
+
+def innovations(
     h: Horizon,
     name: str,
-    rv_fn: RVFactory,
+    dist,
     *,
     dims: tuple[str, ...] = (),
 ) -> pt.TensorVariable:
     """Sample a per-step latent over the full horizon.
 
-    Calls ``rv_fn(name, ("time", *dims))`` for the observed window and — when
-    forecasting — ``rv_fn(f"{name}_future", ("time_future", *dims))`` for the
-    horizon, concatenating along time (axis 0). The future variable is what
-    keeps the posterior blind to the horizon (see module docstring).
+    ``dist`` is a pymc-extras ``Prior`` or an unnamed ``.dist()`` tensor.
+    A ``Prior`` follows :func:`~pymc_forecast.priors.prior_rv_factory`,
+    including one shared draw of nested hyper-priors. A ``.dist()`` is
+    expanded to the segment shape and registered as ``name`` with dims
+    ``("time", *dims)`` and, when forecasting, ``{name}_future`` with dims
+    ``("time_future", *dims)``.
 
-    Parameters
-    ----------
-    h
-        The horizon of the current model build.
-    name
-        Base variable name for the in-sample latent.
-    rv_fn
-        Factory creating the variable, e.g.
-        ``lambda name, dims: pm.Normal(name, 0, drift_scale, dims=dims)``.
-        It must create the variable with exactly the dims it is given.
-        A pymc-extras ``Prior`` is also accepted (e.g. ``Prior("Normal",
-        mu=0, sigma=0.1)``); nested hyper-priors are created once under
-        ``name`` and shared by the in-sample and future segments (see
-        :mod:`pymc_forecast.priors`).
-    dims
-        Extra (non-time) dims of the latent, e.g. ``("series",)``.
-
-    Returns
-    -------
-    TensorVariable
-        The latent over the full horizon, time on axis 0.
+    Returns the latent over the full horizon, concatenated on axis 0. When
+    ``h.future == 0`` the forecast suffix is omitted.
     """
-    if is_prior_like(rv_fn):
-        rv_fn = prior_rv_factory(rv_fn, name)
-    prefix = rv_fn(name, (TIME_DIM, *dims))
+    if is_prior_like(dist):
+        rv_fn = prior_rv_factory(dist, name)
+        prefix = rv_fn(name, (TIME_DIM, *dims))
+        if h.future == 0:
+            return prefix
+        suffix = rv_fn(f"{name}_future", (FUTURE_DIM, *dims))
+        return pt.concatenate([prefix, suffix], axis=0)
+
+    if not isinstance(dist, pt.TensorVariable) or dist.owner is None:
+        msg = "innovations expects a Prior or an unnamed .dist() tensor"
+        raise HorizonError(msg)
+    _assert_dist_has_no_time_axis(dist)
+    model = pm.modelcontext(None)
+    prefix = model.register_rv(
+        expand_dist(dist, _segment_shape((TIME_DIM, *dims))),
+        name,
+        dims=(TIME_DIM, *dims),
+    )
     if h.future == 0:
         return prefix
-    suffix = rv_fn(f"{name}_future", (FUTURE_DIM, *dims))
+    suffix = model.register_rv(
+        expand_dist(dist, _segment_shape((FUTURE_DIM, *dims))),
+        f"{name}_future",
+        dims=(FUTURE_DIM, *dims),
+    )
     return pt.concatenate([prefix, suffix], axis=0)
 
 
@@ -189,9 +220,63 @@ def _join_names(names: Sequence[str]) -> str:
     return f"{', '.join(quoted[:-1])} and {quoted[-1]}"
 
 
+_DIST_LOC_ERROR = (
+    "only a zero-centered Normal or StudentT .dist() can be shifted onto the "
+    "latent; pass a 1-argument callable (segment_latent) -> unnamed .dist() instead"
+)
+
+
+def _has_observed_parameter(fn) -> bool:
+    try:
+        signature = inspect.signature(fn)
+    except (TypeError, ValueError):
+        return False
+    return "observed" in signature.parameters
+
+
+def _is_zero_constant(var) -> bool:
+    from pytensor.graph.basic import Constant
+
+    if not isinstance(var, Constant):
+        return False
+    return bool(np.all(np.asarray(var.data) == 0))
+
+
+def _rebuild_zero_centered(dist, latent) -> pt.TensorVariable:
+    if not isinstance(dist, pt.TensorVariable) or dist.owner is None:
+        raise HorizonError(_DIST_LOC_ERROR)
+    op_name = type(dist.owner.op).__name__
+    inputs = dist.owner.inputs
+    if op_name == "NormalRV":
+        if not _is_zero_constant(inputs[2]):
+            raise HorizonError(_DIST_LOC_ERROR)
+        return pm.Normal.dist(latent, inputs[3])
+    if op_name == "StudentTRV":
+        if not _is_zero_constant(inputs[3]):
+            raise HorizonError(_DIST_LOC_ERROR)
+        return pm.StudentT.dist(inputs[2], latent, sigma=inputs[4])
+    raise HorizonError(_DIST_LOC_ERROR)
+
+
+def _register_unnamed(name: str, dist, dims: tuple[str, ...], observed) -> pt.TensorVariable:
+    if not isinstance(dist, pt.TensorVariable) or dist.owner is None:
+        msg = "observation callable must return an unnamed .dist()"
+        raise HorizonError(msg)
+    return pm.modelcontext(None).register_rv(dist, name, dims=dims, observed=observed)
+
+
+def _emit_observation(obs, name: str, segment, dims: tuple[str, ...], observed):
+    """Dispatch one observation segment. The 4-argument factory path is unchanged."""
+    if callable(obs) and _has_observed_parameter(obs):
+        return obs(name, segment, dims, observed)
+    if callable(obs):
+        return _register_unnamed(name, obs(segment), dims, observed)
+    return _register_unnamed(name, _rebuild_zero_centered(obs, segment), dims, observed)
+
+
 def predict(
     h: Horizon,
-    obs_fn: ObsFactory,
+    obs,
     latent: pt.TensorVariable,
     *,
     expected_observation: pt.TensorVariable | None = None,
@@ -218,7 +303,7 @@ def predict(
     observation noise. It is emitted as ``"expected_observation"`` and
     ``"expected_observation_future"`` without changing the meaning of
     ``"mu"`` / ``"mu_future"``. This value is explicit because ``predict``
-    does not infer inverse links or distribution means from ``obs_fn``.
+    does not infer inverse links or distribution means from ``obs``.
 
     This single primitive covers both upstream ``predict`` (location-family
     noise: pass ``lambda name, mu, dims, observed: pm.Normal(name, mu, sigma,
@@ -231,14 +316,15 @@ def predict(
     ----------
     h
         The horizon of the current model build.
-    obs_fn
-        Observation factory ``(name, latent, dims, observed) -> RV``. Must
-        create the variable with exactly the dims it is given, and pass
-        ``observed`` through. A pymc-extras ``Prior`` is also accepted (e.g.
-        ``Prior("Normal", sigma=Prior("HalfNormal", sigma=1))``): its
-        distribution becomes the likelihood with the latent as location, and
-        nested hyper-priors are created once under ``"obs"`` and shared by
-        the observed and forecast segments (see :mod:`pymc_forecast.priors`).
+    obs
+        Observation specification, dispatched in order: a pymc-extras
+        ``Prior`` (``mu`` left unset; nested hyper-priors shared across
+        segments), a callable whose signature has an ``observed`` parameter
+        (``(name, latent, dims, observed) -> RV``), any other callable
+        (``segment_latent ->`` unnamed ``.dist()``, called once per segment),
+        or a zero-centered ``pm.Normal.dist`` / ``pm.StudentT.dist`` whose
+        location is replaced by the segment latent. Any other dist, or a
+        non-zero location, raises :class:`~pymc_forecast.exceptions.HorizonError`.
     latent
         Full-horizon predictor with time on axis 0.
     expected_observation
@@ -250,8 +336,8 @@ def predict(
         Extra (non-time) dims of the observation. Default: inferred from the
         data's non-time dims (``()`` for prior-only builds).
     """
-    if is_prior_like(obs_fn):
-        obs_fn = prior_obs_factory(obs_fn, OBS_VAR)
+    if is_prior_like(obs):
+        obs = prior_obs_factory(obs, OBS_VAR)
     if dims is None:
         dims = () if h.data is None else tuple(d for d in h.data.dims if d != TIME_DIM)
     observed = None if h.data is None else h.data.transpose(TIME_DIM, ...).values
@@ -278,7 +364,7 @@ def predict(
     expected_output = (
         None if expected_observation is None else pt.broadcast_to(expected_observation, shape)
     )
-    obs_fn(OBS_VAR, latent[: h.t_obs], (TIME_DIM, *dims), observed)
+    _emit_observation(obs, OBS_VAR, latent[: h.t_obs], (TIME_DIM, *dims), observed)
     pm.Deterministic(MU_VAR, latent_output[: h.t_obs], dims=(TIME_DIM, *dims))
     if expected_output is not None:
         pm.Deterministic(
@@ -287,7 +373,7 @@ def predict(
             dims=(TIME_DIM, *dims),
         )
     if h.future > 0:
-        obs_fn(FORECAST_VAR, latent[h.t_obs :], (FUTURE_DIM, *dims), None)
+        _emit_observation(obs, FORECAST_VAR, latent[h.t_obs :], (FUTURE_DIM, *dims), None)
         pm.Deterministic(MU_FORECAST_VAR, latent_output[h.t_obs :], dims=(FUTURE_DIM, *dims))
         if expected_output is not None:
             pm.Deterministic(
@@ -305,7 +391,7 @@ class ForecastingModel(PriorConfig, abc.ABC):
     """Object-oriented facade over the functional primitives.
 
     Subclasses implement :meth:`model` and use the bound helpers
-    :meth:`time_series` / :meth:`predict`, which thread the current
+    :meth:`innovations` / :meth:`predict`, which thread the current
     :class:`Horizon` automatically. An instance is a valid model function for
     :func:`build_model` and the forecaster classes.
 
@@ -324,7 +410,7 @@ class ForecastingModel(PriorConfig, abc.ABC):
             }
 
             def model(self, covariates, data=None):
-                drift = self.time_series("drift", self.prior_config["drift"])
+                drift = self.innovations("drift", self.prior_config["drift"])
                 self.predict(self.prior_config["noise"], pt.cumsum(drift))
 
         LocalLevel(priors={"drift": Prior("StudentT", nu=4, mu=0, sigma=0.2)})
@@ -347,15 +433,13 @@ class ForecastingModel(PriorConfig, abc.ABC):
             raise HorizonError(msg)
         return self._horizon
 
-    def time_series(
-        self, name: str, rv_fn: RVFactory, *, dims: tuple[str, ...] = ()
-    ) -> pt.TensorVariable:
-        """Bound :func:`time_series` using the current build's horizon."""
-        return time_series(self._require_horizon(), name, rv_fn, dims=dims)
+    def innovations(self, name, dist, *, dims=()) -> pt.TensorVariable:
+        """Bound :func:`innovations` using the current build's horizon."""
+        return innovations(self._require_horizon(), name, dist, dims=dims)
 
     def predict(
         self,
-        obs_fn: ObsFactory,
+        obs,
         latent: pt.TensorVariable,
         *,
         expected_observation: pt.TensorVariable | None = None,
@@ -364,7 +448,7 @@ class ForecastingModel(PriorConfig, abc.ABC):
         """Bound :func:`predict` using the current build's horizon."""
         predict(
             self._require_horizon(),
-            obs_fn,
+            obs,
             latent,
             expected_observation=expected_observation,
             dims=dims,

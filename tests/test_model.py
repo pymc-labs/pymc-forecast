@@ -16,7 +16,7 @@ from example_models import (
 
 from pymc_forecast.data import TIME_DIM
 from pymc_forecast.exceptions import HorizonError
-from pymc_forecast.model import ForecastingModel, Horizon, build_model, predict, time_series
+from pymc_forecast.model import ForecastingModel, Horizon, build_model, innovations, predict
 
 
 class TestHorizon:
@@ -47,7 +47,7 @@ class TestBuildModel:
         assert len(model.coords["time_future"]) == 5
         assert "forecast" in model.named_vars
 
-    def test_time_series_creates_future_var(self):
+    def test_innovations_creates_future_var(self):
         data, cov = make_random_walk_data()
         model = build_model(random_walk_model, data, cov)
         names = {rv.name for rv in model.free_RVs}
@@ -100,7 +100,7 @@ class TestBuildModel:
         # the likelihood; mu must be recorded at the same full shape
         def broadcasting(covariates, data=None):
             h = Horizon.from_data(covariates, data)
-            drift = time_series(h, "drift", lambda name, dims: pm.Normal(name, 0.0, 0.2, dims=dims))
+            drift = innovations(h, "drift", pm.Normal.dist(0.0, 0.2))
             sigma = pm.HalfNormal("sigma", 0.5)
             predict(
                 h,
@@ -169,7 +169,7 @@ class TestForecastingModelFacade:
     def test_horizon_unavailable_outside_build(self):
         instance = RandomWalkForecastingModel()
         with pytest.raises(HorizonError, match="during a model build"):
-            instance.time_series("drift", lambda name, dims: None)
+            instance.innovations("drift", pm.Normal.dist(0.0, 1.0))
 
 
 def test_model_function_receives_covariates_then_data():
@@ -209,3 +209,128 @@ def test_from_arrays_absent_and_class_reads_horizon():
     cov = xr.DataArray([0.0, 0.0, 0.0], dims="time", coords={"time": [0, 1, 2]})
     build_model(Probe(), data, cov)
     assert seen == {"t": 2, "future": 1}
+
+
+def test_time_series_is_not_importable():
+    import pymc_forecast
+
+    assert not hasattr(pymc_forecast, "time_series")
+    with pytest.raises(ImportError):
+        from pymc_forecast import time_series  # noqa: F401
+
+
+def test_innovations_registers_future_var_and_concatenates_on_axis_0():
+    from pymc_forecast.model import innovations
+
+    data, cov = make_random_walk_data(t_obs=8, horizon=3)
+    captured = {}
+
+    def model(covariates, data=None):
+        h = Horizon.from_data(covariates, data)
+        captured["drift"] = innovations(h, "drift", pm.Normal.dist(0.0, 0.25))
+        predict(h, lambda mu: pm.Normal.dist(mu, 1.0), captured["drift"])
+
+    built = build_model(model, data, cov)
+    assert built.named_vars_to_dims["drift"] == ("time",)
+    assert built.named_vars_to_dims["drift_future"] == ("time_future",)
+    drift = captured["drift"]
+    assert drift.owner.op.axis == 0
+    assert tuple(drift.eval().shape) == (11,)
+
+
+def test_innovations_logp_matches_named_normal():
+    from pymc_forecast.model import innovations
+
+    time = np.arange(8)
+    sigma = 0.4
+    point = np.linspace(-1.0, 1.0, time.size)
+    h = Horizon(data=None, time=time)
+    with pm.Model(coords={"time": time}) as via_innovations:
+        innovations(h, "drift", pm.Normal.dist(0.0, sigma))
+    with pm.Model(coords={"time": time}) as via_named:
+        pm.Normal("drift", 0.0, sigma, dims="time")
+    np.testing.assert_allclose(
+        via_innovations.compile_logp()({"drift": point}),
+        via_named.compile_logp()({"drift": point}),
+    )
+
+
+def test_innovations_rejects_dist_that_already_has_a_time_dimension():
+    from pymc_forecast.model import innovations
+
+    time = np.arange(6)
+    h = Horizon(data=None, time=time)
+    with pm.Model(coords={"time": time}):
+        with pytest.raises(HorizonError, match="time"):
+            innovations(h, "drift", pm.Normal.dist(0.0, 1.0, shape=(time.size,)))
+
+
+def test_predict_callable_registers_obs_and_forecast():
+    data, cov = make_random_walk_data(t_obs=8, horizon=3)
+    nu = 5.0
+    sigma = 0.3
+
+    def model(covariates, data=None):
+        h = Horizon.from_data(covariates, data)
+        latent = pt.zeros(h.duration)
+        predict(h, lambda mu: pm.StudentT.dist(nu, mu, sigma=sigma), latent)
+
+    built = build_model(model, data, cov)
+    assert "obs" in built.named_vars
+    assert "forecast" in built.named_vars
+    assert built.named_vars_to_dims["obs"] == ("time",)
+    assert built.named_vars_to_dims["forecast"] == ("time_future",)
+
+
+def test_predict_studentt_dist_logp_matches_named_observation():
+    time = np.arange(7)
+    y = np.linspace(-0.5, 0.8, time.size)
+    latent_prefix = np.linspace(-0.2, 0.2, time.size)
+    nu = 4.0
+    sigma = 0.5
+    data = xr.DataArray(y, dims="time", coords={"time": time})
+    h = Horizon(data=data, time=time)
+    with pm.Model(coords={"time": time}) as via_predict:
+        predict(h, pm.StudentT.dist(nu, 0.0, sigma=sigma), pt.as_tensor(latent_prefix))
+    with pm.Model(coords={"time": time}) as via_named:
+        pm.StudentT("obs", nu, latent_prefix, sigma=sigma, observed=y, dims="time")
+    np.testing.assert_allclose(via_predict.compile_logp()({}), via_named.compile_logp()({}))
+
+
+def test_predict_laplace_dist_raises():
+    time = np.arange(4)
+    data = xr.DataArray(np.zeros(time.size), dims="time", coords={"time": time})
+    h = Horizon(data=data, time=time)
+    with pm.Model(coords={"time": time}):
+        with pytest.raises(HorizonError, match="1-argument callable"):
+            predict(h, pm.Laplace.dist(0.0, 1.0), pt.zeros(time.size))
+
+
+def test_predict_four_argument_factory_still_receives_name_latent_dims_observed():
+    time = np.arange(5)
+    future = np.arange(5, 8)
+    y = np.ones(time.size)
+    data = xr.DataArray(y, dims="time", coords={"time": time})
+    h = Horizon(data=data, time=time, time_future=future)
+    seen = []
+
+    def factory(name, latent, dims, observed):
+        seen.append((name, latent, dims, observed))
+        return pm.Normal(name, latent, 1.0, dims=dims, observed=observed)
+
+    with pm.Model(coords={"time": time, "time_future": future}):
+        predict(h, factory, pt.zeros(time.size + future.size))
+    assert [item[0] for item in seen] == ["obs", "forecast"]
+    assert seen[0][2] == ("time",)
+    assert seen[1][2] == ("time_future",)
+    np.testing.assert_array_equal(seen[0][3], y)
+    assert seen[1][3] is None
+    assert tuple(seen[0][1].shape.eval()) == (time.size,)
+    assert tuple(seen[1][1].shape.eval()) == (future.size,)
+
+
+def test_expand_dist_depends_on_change_dist_size():
+    from pymc_forecast._dist import expand_dist
+
+    expanded = expand_dist(pm.Normal.dist(0.0, 1.0), (4,))
+    assert tuple(expanded.shape.eval()) == (4,)

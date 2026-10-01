@@ -17,7 +17,7 @@ def regression(covariates, data=None):
     beta = pm.Normal("beta", 0, 1, dims="covariate")
     predict(
         h,
-        lambda name, mu, dims, obs: pm.Normal(name, mu, 1, dims=dims, observed=obs),
+        lambda name, mu, dims, observed: pm.Normal(name, mu, 1, dims=dims, observed=observed),
         covariates.values @ beta,
     )
 
@@ -99,7 +99,7 @@ def test_forecast_preserves_short_index_frequency(index):
         theta = pm.Normal("theta")
         predict(
             h,
-            lambda name, mu, dims, obs: pm.Normal(name, mu, 1, dims=dims, observed=obs),
+            lambda name, mu, dims, observed: pm.Normal(name, mu, 1, dims=dims, observed=observed),
             pt.ones(h.duration) * theta,
         )
 

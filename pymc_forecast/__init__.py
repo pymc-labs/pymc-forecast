@@ -61,8 +61,8 @@ from pymc_forecast.model import (
     ForecastingModel,
     Horizon,
     build_model,
+    innovations,
     predict,
-    time_series,
 )
 from pymc_forecast.prediction import (
     forecast,
@@ -124,7 +124,7 @@ __all__ = [
     "extend_time_index",
     "forecast",
     "fourier_features",
-    "make_mase",
+    "innovations",
     "markov_time_series",
     "null_covariates",
     "periodic_repeat",
@@ -135,5 +135,4 @@ __all__ = [
     "results_to_dataframe",
     "ssoe",
     "thin_draws",
-    "time_series",
 ]

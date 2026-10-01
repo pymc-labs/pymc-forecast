@@ -1,6 +1,6 @@
 """Markov (state-space) time-series latents via ``pytensor.scan``.
 
-The scan analogue of :func:`~pymc_forecast.model.time_series`: in-sample steps
+The scan analogue of :func:`~pymc_forecast.model.innovations`: in-sample steps
 run in one scan-backed ``pm.CustomDist`` under the base name; when forecasting,
 horizon steps run in a second scan-backed ``CustomDist`` named
 ``{name}_future`` whose initial state is the **final in-sample value** — so

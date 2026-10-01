@@ -10,7 +10,7 @@ from example_models import make_random_walk_data
 
 from pymc_forecast.exceptions import HorizonError
 from pymc_forecast.forecaster import Forecaster
-from pymc_forecast.model import ForecastingModel, Horizon, build_model, predict, time_series
+from pymc_forecast.model import ForecastingModel, Horizon, build_model, innovations, predict
 from pymc_forecast.priors import PriorConfig
 from pymc_forecast.statespace import StatespaceModel
 
@@ -22,7 +22,7 @@ SEED = 20260714
 def prior_model(covariates, data=None):
     """Random-walk model written entirely with Prior objects."""
     h = Horizon.from_data(covariates, data)
-    drift = time_series(h, "drift", Prior("Normal", mu=Prior("Normal", mu=0, sigma=1), sigma=0.1))
+    drift = innovations(h, "drift", Prior("Normal", mu=Prior("Normal", mu=0, sigma=1), sigma=0.1))
     predict(h, Prior("Normal", sigma=Prior("HalfNormal", sigma=0.5)), pt.cumsum(drift))
 
 
@@ -33,7 +33,7 @@ class PriorRandomWalk(ForecastingModel):
     }
 
     def model(self, covariates, data=None):
-        drift = self.time_series("drift", self.prior_config["drift"])
+        drift = self.innovations("drift", self.prior_config["drift"])
         self.predict(self.prior_config["noise"], pt.cumsum(drift))
 
 
@@ -61,7 +61,7 @@ class TestPriorPrimitives:
 
         def model_fn(covariates, data=None):
             h = Horizon.from_data(covariates, data)
-            drift = time_series(h, "drift", Prior("Normal", mu=0, sigma=bad_hyper))
+            drift = innovations(h, "drift", Prior("Normal", mu=0, sigma=bad_hyper))
             predict(
                 h,
                 Prior("Normal", sigma=0.5),
@@ -76,7 +76,7 @@ class TestPriorPrimitives:
 
         def model_fn(covariates, data=None):
             h = Horizon.from_data(covariates, data)
-            drift = time_series(h, "drift", Prior("Normal", mu=0, sigma=0.1))
+            drift = innovations(h, "drift", Prior("Normal", mu=0, sigma=0.1))
             predict(h, Prior("Normal", mu=1.0, sigma=0.5), pt.cumsum(drift))
 
         with pytest.raises(ValueError, match="leave 'mu' unset"):
@@ -150,7 +150,7 @@ class TestBatchDims:
 
         def model_fn(covariates, data=None):
             h = Horizon.from_data(covariates, data)
-            drift = time_series(h, "drift", Prior("Normal", mu=0, sigma=0.2), dims=("series",))
+            drift = innovations(h, "drift", Prior("Normal", mu=0, sigma=0.2), dims=("series",))
             predict(h, Prior("Normal", sigma=0.5), pt.cumsum(drift, axis=0))
 
         model = build_model(model_fn, data, cov)
