@@ -13,16 +13,16 @@ breaking change, made only in a minor release and called out here.
   fit's `observed_data` and `constant_data` groups, which pymc-extras reads
   to recover the fit coords, observed data, and exogenous inputs.
 - **Breaking** ([#57](https://github.com/pymc-labs/pymc-forecast/issues/57)).
-  Recommend `0.3.0` when this cutover is released. `__version__` is still
-  `0.2.0`. Prediction schema names did not change.
+  `__version__` is `0.3.0.dev0`; release this cutover as `0.3.0` (`0.2.0` is
+  the published release and does not include it). Prediction schema names did not change.
   - Model signature `(h, covariates)` to `(covariates, data=None)`.
   - `ForecastingModel.model(self, h, covariates)` to `model(self, covariates, data=None)`.
-  - `time_series` removed. Use `innovations`. A `.dist()` or a pymc-extras `Prior`, not an `RVFactory`. A `.dist()`'s parameters broadcast against `("time", *dims)`, so per-series scales and multivariate dists work.
+  - `time_series` removed. Use `innovations`. A `.dist()` or a pymc-extras `Prior`, not an `RVFactory`. A `.dist()`'s parameters broadcast against `("time", *dims)`, so per-series scales and multivariate dists work. A model variable passed where a `.dist()` is expected (e.g. `pm.Normal("raw", ...)`), or a `.dist()` whose parameters depend on random variables that are not in the model, is rejected at registration with the offending name.
   - `markov_time_series` removed. Use `markov_series`. No `advance`.
   - `Horizon.from_arrays` removed. Use `Horizon.from_data`.
-  - `ssoe(h, name, init, mean, update, noise_fn, *, y=..., params=...)` becomes `ssoe(h, name, y, init, mean, update, noise, xs=None, *, params=..., dims=...)`. `y=None` still means `h.data`. `noise` is a `.dist()` or a `Prior`. Its parameters broadcast against `("time_future", *dims)`.
-  - `predict`'s second argument is no longer only a 4-argument factory. Any callable that requires four positional arguments (it cannot be called with one) is still the `(name, latent, dims, observed)` factory, whatever its parameter names; callables that also accept one argument, such as `pm.Poisson.dist`, take the 1-argument path. A 1-argument `segment_latent -> .dist()` callable is accepted. A zero-centered `.dist()` is accepted for `Normal` and `StudentT`.
-  - Functional fitters: `fit_vi`, `fit_mcmc`, `fit_pathfinder`, `FitResult`, `draw_posterior`. The classes call those functions. Like the classes, the fitters drop covariate rows past the training window. Constructors and attributes did not change.
+  - `ssoe(h, name, init, mean, update, noise_fn, *, y=..., params=...)` becomes `ssoe(h, name, y, init, mean, update, noise, xs=None, *, params=..., dims=...)`. `y=None` still means `h.data`. `noise` is an unnamed, zero-centered `.dist()` (the location of `Normal` / `StudentT` noise is checked) or a `Prior` with constant parameters. A `Prior` with `Prior`-valued parameters is rejected: its hyper-priors would exist only on the forecast horizon and never be fitted. Create the scale in the model body, use it in the observation, and pass `pm.Normal.dist(0, sigma)`. Its parameters broadcast against `("time_future", *dims)`.
+  - `predict`'s second argument is no longer only a 4-argument factory. A callable with four positional parameters `(name, latent, dims, observed)` is the factory, whatever their names or defaults. Other callables take the 1-argument `segment_latent -> .dist()` path: the latent is their first positional argument, so a bare PyMC `.dist` classmethod is accepted only when that argument is `mu` (e.g. `pm.Poisson.dist`; `pm.StudentT.dist` is rejected because it takes `nu` first). The callable is called once per segment and must not create model variables. A zero-centered `.dist()` is accepted for `Normal` and `StudentT`.
+  - Functional fitters: `fit_vi`, `fit_mcmc`, `fit_pathfinder`, `FitResult`, `draw_posterior`. The classes call those functions. Like the classes, the fitters drop covariate rows past the training window. Constructors and attributes did not change. A `model=` passed to a fitter must be a training-window model; one with `forecast` or `*_future` free variables is rejected before sampling. A VI `FitResult` keeps `idata=None`; pass the `Dataset` returned by `draw_posterior` to `forecast`.
 
 - Add `ssoe` and `SSOEResult` for observation-driven recursions with named inputs, shared training/forecast updates, and fresh future errors under posterior replay.
 - Add executed ARMA, intermittent-demand and inference-comparison notebooks;

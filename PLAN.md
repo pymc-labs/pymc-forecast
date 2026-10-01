@@ -92,14 +92,15 @@ Module inventory of the source:
    `InferenceData`/xarray with real time coordinates, metrics reduce over named
    dims. Coords (e.g. `pandas.DatetimeIndex`) flow from input data through to
    forecast outputs.
-2. **Model API shape.** Keep the two-level design — a functional core where the
-   user writes a model body against a `Horizon` (primitives: `time_series`,
-   `markov_time_series`, `predict`, `predict_glm`) executed inside a managed
-   `pm.Model` context, plus an OOP `ForecastingModel` facade. The builder
+2. **Model API shape.** Keep the two-level design. The user-facing API leads
+   with the object-oriented `ForecastingModel` (bound `innovations` / `predict` /
+   `markov_series`, `self.horizon`, injectable priors) and the forecaster
+   classes. Underneath is a functional core of model bodies
+   `(covariates, data=None)` built on `Horizon.from_data`, with primitives
+   `innovations`, `markov_series`, `predict`, `ssoe`, `predict_mvn`, and fitters
+   `fit_vi` / `fit_mcmc` / `fit_pathfinder` that the classes call. The builder
    constructs a fresh model per call (train: no future coords; forecast: extended
    coords), which is idiomatic PyMC and keeps the "one model definition" invariant.
-   The model-signature sentence in this decision is superseded by
-   [0.3 / 0.4 catch-up](#03--04-catch-up).
 3. **Randomness.** `rng_key` threading → `random_seed` integers / numpy Generators;
    derive per-window seeds deterministically in `backtest`.
 4. **Performance posture.** Accept that per-window refits recompile unless shapes
@@ -108,13 +109,12 @@ Module inventory of the source:
 
 ## 0.3 / 0.4 catch-up
 
-This section supersedes the model-signature sentence in decision 2. The
-functional core is now the primary path: a model body is
-`(covariates, data=None) -> None` and builds its own `Horizon` with
-`Horizon.from_data`. The primitives are `innovations`, `markov_series`,
-`predict`, and `ssoe`. `time_series`, `markov_time_series`, and
-`Horizon.from_arrays` are gone. `ForecastingModel` remains the OOP wrapper
-and calls the same functions. Functional fitters `fit_vi`, `fit_mcmc`, and
+The object-oriented `ForecastingModel` is the primary documented path; the
+functional core is the shared implementation and the equivalent alternative:
+a model body is `(covariates, data=None) -> None` and builds its own `Horizon`
+with `Horizon.from_data`. The primitives are `innovations`, `markov_series`,
+`predict`, `ssoe`, and `predict_mvn`. `time_series`, `markov_time_series`, and
+`Horizon.from_arrays` are gone. Functional fitters `fit_vi`, `fit_mcmc`, and
 `fit_pathfinder` are the inference core; the forecaster classes call them
 and keep their constructors and attributes.
 
