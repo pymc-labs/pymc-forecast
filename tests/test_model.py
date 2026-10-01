@@ -2,6 +2,7 @@ import inspect
 
 import numpy as np
 import pymc as pm
+import pytensor
 import pytensor.tensor as pt
 import pytest
 import xarray as xr
@@ -234,7 +235,8 @@ def test_innovations_registers_future_var_and_concatenates_on_axis_0():
     assert built.named_vars_to_dims["drift"] == ("time",)
     assert built.named_vars_to_dims["drift_future"] == ("time_future",)
     drift = captured["drift"]
-    assert drift.owner.op.axis == 0
+    fn = pytensor.function([built["drift"], built["drift_future"]], drift)
+    np.testing.assert_array_equal(fn(np.arange(8.0), np.arange(8.0, 11.0)), np.arange(11.0))
     assert tuple(drift.eval().shape) == (11,)
 
 
