@@ -12,8 +12,19 @@ breaking change, made only in a minor release and called out here.
   pymc-extras (verified on 0.15.1): the thinned posterior now carries the
   fit's `observed_data` and `constant_data` groups, which pymc-extras reads
   to recover the fit coords, observed data, and exogenous inputs.
-- Add `ssoe` and `SSOEResult` for observation-driven recursions with named inputs,
-  shared training/forecast updates, and fresh future errors under posterior replay.
+- **Breaking** ([#57](https://github.com/pymc-labs/pymc-forecast/issues/57)).
+  Recommend `0.3.0` when this cutover is released. `__version__` is still
+  `0.2.0`. Prediction schema names did not change.
+  - Model signature `(h, covariates)` to `(covariates, data=None)`.
+  - `ForecastingModel.model(self, h, covariates)` to `model(self, covariates, data=None)`.
+  - `time_series` removed. Use `innovations`. A `.dist()` or a pymc-extras `Prior`, not an `RVFactory`.
+  - `markov_time_series` removed. Use `markov_series`. No `advance`.
+  - `Horizon.from_arrays` removed. Use `Horizon.from_data`.
+  - `ssoe(h, name, init, mean, update, noise_fn, *, y=..., params=...)` becomes `ssoe(h, name, y, init, mean, update, noise, xs=None, *, params=..., dims=...)`. `y=None` still means `h.data`. `noise` is a `.dist()` or a `Prior`.
+  - `predict`'s second argument is no longer only a 4-argument factory. A 1-argument `segment_latent -> .dist()` callable is accepted. A zero-centered `.dist()` is accepted for `Normal` and `StudentT`.
+  - Functional fitters: `fit_vi`, `fit_mcmc`, `fit_pathfinder`, `FitResult`, `draw_posterior`. The classes call those functions. Constructors and attributes did not change.
+
+- Add `ssoe` and `SSOEResult` for observation-driven recursions with named inputs, shared training/forecast updates, and fresh future errors under posterior replay.
 - Add executed ARMA, intermittent-demand and inference-comparison notebooks;
   refactor Holt-Winters to use `ssoe`, expose conditional future means, and
   center initial seasonality to distinguish it from the initial level.

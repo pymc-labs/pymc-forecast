@@ -5,13 +5,12 @@ import pymc as pm
 import pytensor.tensor as pt
 import pytest
 import xarray as xr
+from example_models import LocalLevelStatespace
 
 from pymc_forecast.exceptions import MethodResolutionError, OptionalDependencyError
 from pymc_forecast.forecaster import Forecaster, HMCForecaster
 from pymc_forecast.model import Horizon, innovations, predict
 from pymc_forecast.statespace import StatespaceForecaster
-
-from example_models import LocalLevelStatespace
 
 
 def local_level(covariates, data=None):

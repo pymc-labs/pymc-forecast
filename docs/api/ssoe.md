@@ -13,10 +13,11 @@ The same callbacks filter training observations and simulate future observations
 
 ```python
 import pymc as pm
-from pymc_forecast import ssoe
+from pymc_forecast import Horizon, ssoe
 
 
-def arma(h, covariates):
+def arma(covariates, data=None):
+    h = Horizon.from_data(covariates, data)
     phi = pm.Uniform("phi", -0.95, 0.95)
     theta = pm.Uniform("theta", -0.95, 0.95)
     sigma = pm.HalfNormal("sigma", 1)
@@ -24,10 +25,11 @@ def arma(h, covariates):
     result = ssoe(
         h,
         "eps",
-        init=(0.0, 0.0),
-        mean=lambda state, x, phi, theta: phi * state[0] + theta * state[1],
-        update=lambda state, y, error, x, phi, theta: (y, error),
-        noise_fn=lambda name, dims: pm.Normal(name, 0, sigma, dims=dims),
+        None,
+        (0.0, 0.0),
+        lambda state, x, phi, theta: phi * state[0] + theta * state[1],
+        lambda state, y, error, x, phi, theta: (y, error),
+        pm.Normal.dist(0, sigma),
         params=(phi, theta),
     )
     pm.Normal("obs", result.mu, sigma, observed=h.data.values, dims="time")
@@ -65,7 +67,7 @@ those observations**; an update gate alone does not mask a likelihood. Future ga
 must come from known inputs or an explicit scenario, never held-out observations.
 The helper does not infer a missing-data or censoring mechanism.
 
-For sampled hidden states, use `markov_time_series`. For linear-Gaussian hidden
+For sampled hidden states, use `markov_series`. For linear-Gaussian hidden
 states, the `pymc-extras` statespace backend can marginalize the state path. See the
 [ARMA](../examples/arma.ipynb) and [Holt-Winters](../examples/exponential_smoothing_state_space.ipynb)
 examples for observation-driven recursions.

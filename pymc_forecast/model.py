@@ -24,6 +24,7 @@ import pymc as pm
 import pytensor.tensor as pt
 import xarray as xr
 
+from pymc_forecast._dist import expand_dist
 from pymc_forecast.data import (
     FUTURE_DIM,
     TIME_DIM,
@@ -31,7 +32,6 @@ from pymc_forecast.data import (
     validate_alignment,
 )
 from pymc_forecast.exceptions import HorizonError
-from pymc_forecast._dist import expand_dist
 from pymc_forecast.priors import (
     PriorConfig,
     is_prior_like,
@@ -86,7 +86,6 @@ ObsFactory = Callable[..., pt.TensorVariable]
 (time on axis 0), ``dims`` the variable's dims, and ``observed`` the observed
 values (``None`` for the forecast suffix and during prior-only builds).
 """
-
 
 
 @dataclass(frozen=True)

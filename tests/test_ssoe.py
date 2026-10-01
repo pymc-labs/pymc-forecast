@@ -275,9 +275,7 @@ def test_holt_winters_matches_reference_with_mixed_state_shapes():
 
     sigma = 1.0
     with pm.Model(coords={"time": h.time, "time_future": h.time_future}) as model:
-        r = ssoe(
-            h, "eps", None, initial, mean, update, pm.Normal.dist(0.0, sigma), params=(phi,)
-        )
+        r = ssoe(h, "eps", None, initial, mean, update, pm.Normal.dist(0.0, sigma), params=(phi,))
         fn = pytensor.function([model["eps_future"]], [r.mu, r.mu_future, r.y_future])
         mu, future_mu, future_y = fn(future_errors)
     np.testing.assert_allclose(mu, reference_means[: h.t_obs])

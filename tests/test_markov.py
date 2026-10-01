@@ -1,12 +1,11 @@
 """Scan-based Markov latents: logp derivation, replay, forecast continuity."""
 
-import pymc_forecast
-
 import numpy as np
 import pymc as pm
 import pytest
 import xarray as xr
 
+import pymc_forecast
 from pymc_forecast.exceptions import HorizonError
 from pymc_forecast.forecaster import HMCForecaster
 from pymc_forecast.markov import markov_series

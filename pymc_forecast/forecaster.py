@@ -30,10 +30,11 @@ from pymc_forecast.exceptions import (
     AlignmentError,
     MethodResolutionError,
     NotFittedError,
-    OptionalDependencyError,
 )
 from pymc_forecast.fit import (
     draw_posterior as draw_posterior_result,
+)
+from pymc_forecast.fit import (
     fit_mcmc,
     fit_pathfinder,
     fit_vi,
@@ -79,7 +80,7 @@ class BaseForecaster(abc.ABC):
     Parameters
     ----------
     model_fn
-        The model body (``(Horizon, covariates) -> None`` or a
+        The model body (``(covariates, data=None) -> None`` or a
         :class:`~pymc_forecast.model.ForecastingModel`).
     data
         Observed training data, or ``None`` to construct unfitted and call
@@ -194,9 +195,7 @@ class BaseForecaster(abc.ABC):
         self._require_fitted()
         result = getattr(self, "_fit_result", None)
         if result is not None:
-            return draw_posterior_result(
-                result, num_samples, random_seed, batch_size=batch_size
-            )
+            return draw_posterior_result(result, num_samples, random_seed, batch_size=batch_size)
         # Stubs and custom adapters that only implement ``_draw_posterior``.
         if batch_size is not None and batch_size <= 0:
             msg = f"batch_size must be positive, got {batch_size}"

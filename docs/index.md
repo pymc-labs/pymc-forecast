@@ -26,22 +26,19 @@ pip install 'pymc-forecast[jax]'     # + JAX-native ADVI backend
 
 ```python
 import pymc as pm, pytensor.tensor as pt
-from pymc_forecast import Forecaster, predict, time_series
+from pymc_forecast import Horizon, draw_posterior, fit_vi, forecast, innovations, predict
 
 
-def local_level(h, covariates):
-    drift = time_series(h, "drift", lambda name, dims: pm.Normal(name, 0.0, 0.5, dims=dims))
-    sigma = pm.HalfNormal("sigma", 1.0)
-    predict(
-        h,
-        lambda name, mu, dims, obs: pm.Normal(name, mu, sigma, dims=dims, observed=obs),
-        pt.cumsum(drift),
-    )
+def local_level(covariates, data=None):
+    h = Horizon.from_data(covariates, data)
+    drift = innovations(h, "drift", pm.Normal.dist(0.0, 0.5))
+    predict(h, pm.StudentT.dist(nu=3, sigma=1.0), pt.cumsum(drift))
 
 
-fc = Forecaster(local_level, train, num_steps=5_000)  # ADVI
-idata = fc.forecast(horizon=8, num_samples=500)
-forecast = idata["predictions"]["forecast"]  # dims: (chain, draw, time_future)
+result = fit_vi(local_level, train, num_steps=5_000)  # ADVI
+posterior = draw_posterior(result, 500)
+idata = forecast(local_level, posterior, train, covariates)
+forecast_draws = idata["predictions"]["forecast"]  # dims: (chain, draw, time_future)
 ```
 
 **[Start with the full workflow →](quickstart.md)** ·

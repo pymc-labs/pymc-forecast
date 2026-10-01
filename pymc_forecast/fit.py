@@ -226,10 +226,7 @@ def draw_posterior(
         size = min(batch_size, num_samples - offset)
         chunk = _draw_once(result, size, rng)
         if chunk.sizes.get("chain") != 1:
-            msg = (
-                "generated posterior batches must have one chain; got "
-                f"sizes {dict(chunk.sizes)}"
-            )
+            msg = f"generated posterior batches must have one chain; got sizes {dict(chunk.sizes)}"
             raise ValueError(msg)
         chunk = chunk.assign_coords(draw=np.arange(offset, offset + size))
         chunks.append(chunk)

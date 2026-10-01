@@ -78,11 +78,11 @@ Module inventory of the source:
 - **`pymc_extras.statespace`**: structural time series (level/trend, seasonality,
   cycles, AR, regression components), SARIMAX, VARMAX — with Kalman filtering and
   built-in `.forecast()`. This covers the linear-Gaussian slice of what
-  `markov_time_series` is used for, with exact marginalization instead of sampling
+  `markov_series` is used for, with exact marginalization instead of sampling
   per-step latents (usually better posteriors and faster). The port should
   interoperate: statespace models as first-class citizens in `backtest`/metrics.
 - **`fit_pathfinder`**: replaces the entire BlackJAX contrib module.
-- Scan-based `markov_time_series` remains valuable for arbitrary nonlinear /
+- Scan-based `markov_series` remains valuable for arbitrary nonlinear /
   non-Gaussian transitions that statespace can't express.
 
 ## Key design decisions
@@ -98,11 +98,28 @@ Module inventory of the source:
    `pm.Model` context, plus an OOP `ForecastingModel` facade. The builder
    constructs a fresh model per call (train: no future coords; forecast: extended
    coords), which is idiomatic PyMC and keeps the "one model definition" invariant.
+   The model-signature sentence in this decision is superseded by
+   [0.3 / 0.4 catch-up](#03--04-catch-up).
 3. **Randomness.** `rng_key` threading → `random_seed` integers / numpy Generators;
    derive per-window seeds deterministically in `backtest`.
 4. **Performance posture.** Accept that per-window refits recompile unless shapes
    are fixed; document `nuts_sampler="nutpie"` / `"numpyro"` for speed; use
    `pm.Data` + `set_data` wherever shapes allow.
+
+## 0.3 / 0.4 catch-up
+
+This section supersedes the model-signature sentence in decision 2. The
+functional core is now the primary path: a model body is
+`(covariates, data=None) -> None` and builds its own `Horizon` with
+`Horizon.from_data`. The primitives are `innovations`, `markov_series`,
+`predict`, and `ssoe`. `time_series`, `markov_time_series`, and
+`Horizon.from_arrays` are gone. `ForecastingModel` remains the OOP wrapper
+and calls the same functions. Functional fitters `fit_vi`, `fit_mcmc`, and
+`fit_pathfinder` are the inference core; the forecaster classes call them
+and keep their constructors and attributes.
+
+VAR is deferred to an Impulso integration. Haar / DCT are deferred to
+<https://github.com/pymc-labs/pymc-forecast/issues/58>.
 
 ## What gets dropped or shrinks
 
