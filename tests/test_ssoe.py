@@ -329,6 +329,64 @@ def test_noise_rv_factory_is_rejected():
             )
 
 
+def _identity_ssoe(h, noise):
+    return ssoe(h, "eps", None, 0.0, lambda state, x: state, lambda state, y, error, x: y, noise)
+
+
+def test_prior_noise_with_hyper_prior_is_rejected_on_a_training_build():
+    prior = pytest.importorskip("pymc_extras.prior").Prior
+    h = Horizon(history(), np.arange(3))
+    noise = prior("Normal", sigma=prior("HalfNormal", sigma=1))
+    with pm.Model(coords={"time": h.time}):
+        with pytest.raises(HorizonError, match="sigma"):
+            _identity_ssoe(h, noise)
+
+
+def test_prior_noise_with_constant_parameters_registers_only_the_future_error():
+    prior = pytest.importorskip("pymc_extras.prior").Prior
+    h = Horizon(history(), np.arange(3), np.arange(3, 5))
+    with pm.Model(coords={"time": h.time, "time_future": h.time_future}) as model:
+        _identity_ssoe(h, prior("Normal", sigma=0.5))
+    assert [rv.name for rv in model.free_RVs] == ["eps_future"]
+
+
+@pytest.mark.parametrize(
+    "make", [lambda: pm.Normal.dist(2.0), lambda: pm.StudentT.dist(4.0, 1.0, sigma=1.0)]
+)
+def test_dist_noise_with_nonzero_location_is_rejected(make):
+    h = Horizon(history(), np.arange(3), np.arange(3, 5))
+    with pm.Model(coords={"time": h.time, "time_future": h.time_future}):
+        with pytest.raises(HorizonError, match="zero"):
+            _identity_ssoe(h, make())
+
+
+def test_dist_noise_that_is_a_model_variable_is_rejected():
+    h = Horizon(history(), np.arange(3), np.arange(3, 5))
+    with pm.Model(coords={"time": h.time, "time_future": h.time_future}):
+        with pytest.raises(HorizonError, match="'raw'"):
+            _identity_ssoe(h, pm.Normal("raw", 0, 1))
+
+
+def test_prior_noise_with_a_model_variable_parameter_is_rejected():
+    prior = pytest.importorskip("pymc_extras.prior").Prior
+    h = Horizon(history(), np.arange(3))
+    with pm.Model(coords={"time": h.time}):
+        sigma = pm.HalfNormal("obs_sigma", 1.0)
+        with pytest.raises(HorizonError, match="non-constant"):
+            _identity_ssoe(h, prior("Normal", sigma=sigma))
+
+
+def test_random_only_custom_dist_noise_registers_the_future_error():
+    h = Horizon(history(), np.arange(3), np.arange(3, 5))
+
+    def draw(mu, sigma, rng=None, size=None):
+        return rng.normal(mu, sigma, size=size)
+
+    with pm.Model(coords={"time": h.time, "time_future": h.time_future}) as model:
+        _identity_ssoe(h, pm.CustomDist.dist(0.0, 1.0, random=draw))
+    assert [rv.name for rv in model.free_RVs] == ["eps_future"]
+
+
 def test_mvnormal_dist_noise_registers_series_support():
     """A multivariate ``.dist()`` keeps its support axis out of the batch size."""
     y = xr.DataArray(

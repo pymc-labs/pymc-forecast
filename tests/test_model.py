@@ -1,3 +1,4 @@
+import functools
 import inspect
 
 import numpy as np
@@ -458,3 +459,113 @@ def test_innovations_accepts_multivariate_dist_when_series_count_equals_horizon(
     assert model.named_vars_to_dims["z_future"] == ("time_future", "series")
     assert tuple(model["z"].eval().shape) == (6, 2)
     assert tuple(model["z_future"].eval().shape) == (2, 2)
+
+
+def test_innovations_rejects_a_registered_model_variable():
+    time = np.arange(4)
+    h = Horizon(data=None, time=time)
+    with pm.Model(coords={"time": time}):
+        with pytest.raises(HorizonError, match="'raw'"):
+            innovations(h, "eps", pm.Normal("raw", 0, 1))
+
+
+def test_innovations_rejects_a_dist_depending_on_an_unregistered_random_variable():
+    time = np.arange(4)
+    h = Horizon(data=None, time=time)
+    with pm.Model(coords={"time": time}):
+        with pytest.raises(HorizonError, match="HalfNormal"):
+            innovations(h, "eps", pm.Normal.dist(0, pm.HalfNormal.dist(1)))
+
+
+def test_innovations_accepts_a_dist_scaled_by_a_registered_variable():
+    time, future = np.arange(4), np.arange(4, 6)
+    h = Horizon(data=None, time=time, time_future=future)
+    with pm.Model(coords={"time": time, "time_future": future}) as model:
+        sigma = pm.HalfNormal("sigma", 1)
+        innovations(h, "eps", pm.Normal.dist(0, sigma))
+    assert np.isfinite(model.compile_logp()(model.initial_point()))
+
+
+def test_predict_rejects_a_dist_classmethod_whose_first_parameter_is_not_mu():
+    time = np.arange(4)
+    data = xr.DataArray(np.ones(4), dims="time", coords={"time": time})
+    h = Horizon(data=data, time=time)
+    with pm.Model(coords={"time": time}):
+        with pytest.raises(HorizonError, match="nu"):
+            predict(h, pm.StudentT.dist, pt.zeros(4))
+
+
+def test_predict_four_parameter_factory_with_defaults_is_a_factory():
+    time = np.arange(4)
+    data = xr.DataArray(np.ones(4), dims="time", coords={"time": time})
+    h = Horizon(data=data, time=time)
+
+    def factory(name, latent=None, dims=(), observed=None):
+        return pm.Normal(name, latent, 1.0, dims=dims, observed=observed)
+
+    with pm.Model(coords={"time": time}) as model:
+        predict(h, factory, pt.zeros(4))
+    assert [rv.name for rv in model.observed_RVs] == ["obs"]
+
+
+def test_predict_one_argument_callable_must_not_create_model_variables():
+    time, future = np.arange(4), np.arange(4, 6)
+    data = xr.DataArray(np.ones(4), dims="time", coords={"time": time})
+    h = Horizon(data=data, time=time, time_future=future)
+    with pm.Model(coords={"time": time, "time_future": future}):
+        with pytest.raises(HorizonError, match="sigma"):
+            predict(h, lambda mu: pm.Normal.dist(mu, pm.HalfNormal("sigma", 1)), pt.zeros(6))
+
+
+def test_predict_rejects_a_registered_model_variable_as_obs():
+    time = np.arange(4)
+    data = xr.DataArray(np.ones(4), dims="time", coords={"time": time})
+    h = Horizon(data=data, time=time)
+    with pm.Model(coords={"time": time}):
+        with pytest.raises(HorizonError, match="'raw'"):
+            predict(h, pm.Normal("raw", 0, 1), pt.zeros(4))
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        lambda: pm.HurdleGamma.dist,
+        lambda: pm.ZeroInflatedPoisson.dist,
+        lambda: functools.partial(pm.StudentT.dist, sigma=2.0),
+    ],
+    ids=["hurdle_gamma", "zero_inflated_poisson", "partial_studentt"],
+)
+def test_predict_rejects_helper_and_partial_dist_classmethods_without_mu_first(make):
+    time = np.arange(4)
+    data = xr.DataArray(np.ones(4), dims="time", coords={"time": time})
+    h = Horizon(data=data, time=time)
+    with pm.Model(coords={"time": time}):
+        with pytest.raises(HorizonError, match="first parameter"):
+            predict(h, make(), pt.ones(4))
+
+
+def test_predict_accepts_a_censored_callable_with_a_registered_scale():
+    time = np.arange(4)
+    data = xr.DataArray(np.ones(4), dims="time", coords={"time": time})
+    h = Horizon(data=data, time=time)
+    with pm.Model(coords={"time": time}) as model:
+        sigma = pm.HalfNormal("sigma", 1.0)
+        predict(
+            h,
+            lambda mu: pm.Censored.dist(pm.Normal.dist(mu, sigma), lower=0.0, upper=None),
+            pt.ones(4),
+        )
+    assert np.isfinite(model.compile_logp()(model.initial_point()))
+
+
+def test_innovations_accepts_a_custom_dist_with_a_registered_scale():
+    time, future = np.arange(4), np.arange(4, 6)
+    h = Horizon(data=None, time=time, time_future=future)
+
+    def scaled_normal(scale, size):
+        return pm.Normal.dist(0.0, scale, size=size)
+
+    with pm.Model(coords={"time": time, "time_future": future}) as model:
+        scale = pm.HalfNormal("scale", 1.0)
+        innovations(h, "drift", pm.CustomDist.dist(scale, dist=scaled_normal))
+    assert np.isfinite(model.compile_logp()(model.initial_point()))

@@ -17,8 +17,9 @@ import pytensor.tensor as pt
 import xarray as xr
 from pymc.pytensorf import collect_default_updates
 from pytensor.raise_op import Assert
+from pytensor.tensor.random.basic import NormalRV, StudentTRV
 
-from pymc_forecast._dist import expand_dist, is_dist
+from pymc_forecast._dist import check_unnamed_dist, expand_dist, is_dist, is_zero_constant
 from pymc_forecast.data import FUTURE_DIM, TIME_DIM
 from pymc_forecast.exceptions import AlignmentError, HorizonError
 from pymc_forecast.model import Horizon
@@ -97,11 +98,63 @@ def _inputs(h: Horizon, xs: xr.DataArray | None):
     return pt.as_tensor_variable(values)
 
 
+_NOISE_PATTERN = (
+    "create sigma in the model body (sigma = pm.HalfNormal('sigma', 1)), use it "
+    "in the observation, and pass pm.Normal.dist(0, sigma) as noise"
+)
+
+
 def _accept_noise(noise) -> None:
-    """Reject an ``RVFactory``. ``noise`` is a ``.dist()`` or a ``Prior``."""
-    if is_prior_like(noise) or is_dist(noise):
+    """Reject noise that cannot forecast the errors the fitted model implies.
+
+    ``noise`` is a ``.dist()`` or a ``Prior``; an ``RVFactory`` is rejected.
+    A ``Prior`` must have constant parameters: a nested hyper-prior would be
+    created only on a forecasting build, so it is absent from the fitted
+    posterior and drawn from its prior. A Normal/StudentT ``Prior`` must leave
+    ``mu`` unset or zero. A ``.dist()`` must be unnamed and depend only on
+    model variables; a ``pm.Normal.dist`` / ``pm.StudentT.dist`` must have a
+    constant zero location. Other dists are not location-checked. Runs on
+    every build, so training builds fail fast too.
+    """
+    if is_prior_like(noise):
+        _accept_prior_noise(noise)
         return
-    raise HorizonError("ssoe noise must be a .dist() or a Prior, not an RVFactory")
+    if not is_dist(noise):
+        raise HorizonError("ssoe noise must be a .dist() or a Prior, not an RVFactory")
+    check_unnamed_dist(noise, owner="ssoe noise")
+    op = noise.owner.op
+    params = op.dist_params(noise.owner)
+    mu = params[0] if isinstance(op, NormalRV) else params[1] if isinstance(op, StudentTRV) else 0
+    if not is_zero_constant(mu):
+        msg = (
+            "ssoe noise must be zero-centered: its location is not a constant zero. "
+            "pm.Normal.dist(sigma) binds sigma as mu; write pm.Normal.dist(0, sigma) "
+            "(or pass mu=0 to pm.StudentT.dist)"
+        )
+        raise HorizonError(msg)
+
+
+def _accept_prior_noise(noise) -> None:
+    nested = sorted(
+        key
+        for key, value in noise.parameters.items()
+        if is_prior_like(value) or (isinstance(value, pt.Variable) and value.owner is not None)
+    )
+    if nested:
+        msg = (
+            f"ssoe noise Prior has non-constant parameters {nested}: a Prior is copied "
+            "when the forecast-only error is created, so hyper-priors and model "
+            "variables in it are never tied to the fitted posterior and the forecast "
+            f"draws them from the prior; {_NOISE_PATTERN}"
+        )
+        raise HorizonError(msg)
+    mu = noise.parameters.get("mu", 0)
+    zero = (
+        is_zero_constant(mu) if isinstance(mu, pt.Variable) else bool(np.all(np.asarray(mu) == 0))
+    )
+    if noise.distribution in ("Normal", "StudentT") and not zero:
+        msg = f"ssoe noise must be zero-centered: leave the Prior's 'mu' unset or 0, got {noise}"
+        raise HorizonError(msg)
 
 
 def _future_noise(name: str, noise, dims: tuple[str, ...]) -> pt.TensorVariable:
@@ -170,6 +223,18 @@ def ssoe(
         per-series scale works. Errors may be correlated across the
         observation dimensions, using e.g. ``pm.MvNormal.dist``. In-sample
         errors are residuals, not random variables.
+
+        A learned scale must be a model variable shared with the observation:
+        create ``sigma = pm.HalfNormal("sigma", 1)`` in the model body, use it
+        in the observation, and pass ``pm.Normal.dist(0, sigma)``. Hence a
+        ``Prior`` with a hyper-prior parameter (which would exist only on
+        forecasting builds and be drawn from its prior), a model variable
+        instead of a ``.dist()``, and a ``.dist()`` depending on unnamed random
+        variables are rejected, on training builds too. A Normal/StudentT
+        ``Prior`` must leave ``mu`` unset or zero, and a ``pm.Normal.dist`` /
+        ``pm.StudentT.dist`` must have a constant zero location
+        (``pm.Normal.dist(sigma)`` binds ``sigma`` as ``mu``). The locations of
+        other dists are not checked.
     xs
         Optional labeled inputs spanning the full horizon. The time dimension
         is selected by name, and coordinates are checked. Future inputs must

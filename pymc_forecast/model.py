@@ -15,6 +15,7 @@ derived from the *coords*: ``future = len(covariates.time) - len(data.time)``.
 """
 
 import abc
+import functools
 import inspect
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -23,12 +24,15 @@ import numpy as np
 import pymc as pm
 import pytensor.tensor as pt
 import xarray as xr
-from pymc.distributions.shape_utils import change_dist_size
-from pytensor.tensor.basic import get_underlying_scalar_constant_value
-from pytensor.tensor.exceptions import NotScalarConstantError
 from pytensor.tensor.random.basic import NormalRV, StudentTRV
 
-from pymc_forecast._dist import expand_dist, is_dist
+from pymc_forecast._dist import (
+    check_unnamed_dist,
+    expand_dist,
+    is_dist,
+    is_zero_constant,
+    resize_dist,
+)
 from pymc_forecast.data import (
     FUTURE_DIM,
     TIME_DIM,
@@ -169,7 +173,11 @@ def innovations(
     Its parameters broadcast against the trailing ``dims`` (e.g. a
     per-series scale), and a multivariate dist's support fills the last
     ``dims``. The time axis belongs to this helper, so a ``.dist()`` with
-    more axes than ``dims`` is rejected.
+    more axes than ``dims`` is rejected. So are a model variable (pass
+    ``pm.Normal.dist(...)``, not ``pm.Normal(name, ...)``) and a ``.dist()``
+    whose parameters are unnamed random variables: create a random scale as
+    a model variable (``sigma = pm.HalfNormal("sigma", 1)``) and pass
+    ``pm.Normal.dist(0, sigma)``.
 
     Returns the latent over the full horizon, concatenated on axis 0. When
     ``h.future == 0`` the forecast suffix is omitted.
@@ -185,6 +193,7 @@ def innovations(
     if not is_dist(dist):
         msg = "innovations expects a Prior or an unnamed .dist() tensor"
         raise HorizonError(msg)
+    check_unnamed_dist(dist, owner="innovations")
     model = pm.modelcontext(None)
     prefix = model.register_rv(
         expand_dist(dist, _segment_shape((TIME_DIM, *dims)), owner="innovations"),
@@ -215,19 +224,57 @@ _DIST_LOC_ERROR = (
 )
 
 
-def _is_observation_factory(fn) -> bool:
-    """Whether ``fn`` requires the 4-argument ``(name, latent, dims, observed)`` form.
+def _dist_classmethod(fn) -> type | None:
+    """The PyMC distribution class behind a bare ``.dist`` classmethod.
 
-    True iff the signature binds four positional arguments and cannot bind
-    one. Decided by arity, not parameter names, so 4-argument factories stay
-    factories whatever they call their arguments. Callables that also accept a
-    single argument, such as PyMC ``.dist`` classmethods with ``*args``, take
-    the 1-argument path, as do callables whose signature cannot be inspected.
+    Also unwraps ``functools.partial``. Covers ``pm.Distribution`` subclasses
+    and the plain helper classes in ``pymc.distributions`` (zero-inflated,
+    hurdle, ``NormalMixture``).
     """
+    while isinstance(fn, functools.partial):
+        fn = fn.func
+    owner = getattr(fn, "__self__", None)
+    if (
+        inspect.ismethod(fn)
+        and fn.__name__ == "dist"
+        and isinstance(owner, type)
+        and (
+            issubclass(owner, pm.Distribution) or owner.__module__.startswith("pymc.distributions")
+        )
+    ):
+        return owner
+    return None
+
+
+def _first_positional_parameter(fn) -> str | None:
+    try:
+        parameters = inspect.signature(fn).parameters.values()
+    except (TypeError, ValueError):
+        return None
+    kinds = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    return next((p.name for p in parameters if p.kind in kinds), None)
+
+
+def _is_observation_factory(fn) -> bool:
+    """Whether ``fn`` is the 4-argument ``(name, latent, dims, observed)`` factory.
+
+    A bare PyMC ``.dist`` classmethod never is. Any other callable is the
+    factory iff its signature has at least four positional parameters, or
+    binds four positional arguments and cannot bind one (e.g. a
+    ``functools.partial``). Decided by arity, not parameter names. Callables
+    with fewer than four positional parameters that also accept a single
+    argument (e.g. through ``*args``), and callables whose signature cannot be
+    inspected, take the 1-argument path.
+    """
+    if _dist_classmethod(fn) is not None:
+        return False
     try:
         signature = inspect.signature(fn)
     except (TypeError, ValueError):
         return False
+    kinds = (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    if sum(p.kind in kinds for p in signature.parameters.values()) >= 4:
+        return True
     try:
         signature.bind(None, None, None, None)
     except TypeError:
@@ -239,12 +286,22 @@ def _is_observation_factory(fn) -> bool:
     return False
 
 
-def _is_zero(var) -> bool:
-    """Whether ``var`` is a compile-time constant equal to zero everywhere."""
-    try:
-        return get_underlying_scalar_constant_value(var) == 0
-    except NotScalarConstantError:
-        return False
+def _check_dist_classmethod(fn) -> None:
+    """Reject a bare ``.dist`` classmethod whose first parameter is not ``mu``."""
+    cls = _dist_classmethod(fn)
+    if cls is None:
+        return
+    first = _first_positional_parameter(fn)
+    if first == "mu":
+        return
+    name = cls.__name__
+    msg = (
+        f"pm.{name}.dist takes {first!r} as its first parameter; a bare .dist "
+        "classmethod is accepted only when its first parameter is 'mu'. Pass a "
+        "1-argument callable that binds the latent by keyword, e.g. "
+        f"lambda latent: pm.{name}.dist(..., <parameter>=latent)"
+    )
+    raise HorizonError(msg)
 
 
 def _rebuild_zero_centered(dist, latent) -> pt.TensorVariable:
@@ -252,14 +309,13 @@ def _rebuild_zero_centered(dist, latent) -> pt.TensorVariable:
         raise HorizonError(_DIST_LOC_ERROR)
     op = dist.owner.op
     params = op.dist_params(dist.owner)
-    if isinstance(op, NormalRV):
-        mu, sigma = params
-        if _is_zero(mu):
-            return pm.Normal.dist(latent, sigma)
-    elif isinstance(op, StudentTRV):
-        nu, mu, sigma = params
-        if _is_zero(mu):
-            return pm.StudentT.dist(nu, latent, sigma=sigma)
+    if isinstance(op, NormalRV) and is_zero_constant(params[0]):
+        check_unnamed_dist(dist, owner="predict")
+        return pm.Normal.dist(latent, params[1])
+    if isinstance(op, StudentTRV) and is_zero_constant(params[1]):
+        check_unnamed_dist(dist, owner="predict")
+        nu, _, sigma = params
+        return pm.StudentT.dist(nu, latent, sigma=sigma)
     raise HorizonError(_DIST_LOC_ERROR)
 
 
@@ -267,13 +323,27 @@ def _register_unnamed(name: str, dist, dims: tuple[str, ...], observed) -> pt.Te
     if not is_dist(dist):
         msg = "observation callable must return an unnamed .dist()"
         raise HorizonError(msg)
+    check_unnamed_dist(dist, owner="predict")
     model = pm.modelcontext(None)
     shape = tuple(model.dim_lengths[dim] for dim in dims)
-    # Registration attaches dim names but does not infer the distribution's size.
-    # Keep multivariate support axes out of the batch size, as PyMC constructors do.
-    batch_shape = shape[: len(shape) - dist.owner.op.ndim_supp]
-    dist = change_dist_size(dist, batch_shape, expand=False)
-    return model.register_rv(dist, name, dims=dims, observed=observed)
+    return model.register_rv(resize_dist(dist, shape), name, dims=dims, observed=observed)
+
+
+def _call_one_argument(obs, segment) -> pt.TensorVariable:
+    """Call ``obs(segment)``, rejecting model variables it creates."""
+    _check_dist_classmethod(obs)
+    model = pm.modelcontext(None)
+    before = set(model.named_vars)
+    dist = obs(segment)
+    created = sorted(set(model.named_vars) - before)
+    if created:
+        msg = (
+            f"the observation callable created model variables {_join_names(created)}; "
+            "it is called once per segment and must not create model variables — "
+            "create them in the model body and close over them"
+        )
+        raise HorizonError(msg)
+    return dist
 
 
 def _emit_observation(obs, name: str, segment, dims: tuple[str, ...], observed):
@@ -281,7 +351,7 @@ def _emit_observation(obs, name: str, segment, dims: tuple[str, ...], observed):
     if callable(obs) and _is_observation_factory(obs):
         return obs(name, segment, dims, observed)
     if callable(obs):
-        return _register_unnamed(name, obs(segment), dims, observed)
+        return _register_unnamed(name, _call_one_argument(obs, segment), dims, observed)
     return _register_unnamed(name, _rebuild_zero_centered(obs, segment), dims, observed)
 
 
@@ -328,15 +398,26 @@ def predict(
     h
         The horizon of the current model build.
     obs
-        Observation specification, dispatched in order: a pymc-extras
-        ``Prior`` (``mu`` left unset; nested hyper-priors shared across
-        segments), a callable that requires four positional arguments
-        (``(name, latent, dims, observed) -> RV``; parameter names do not
-        matter), any other callable
-        (``segment_latent ->`` unnamed ``.dist()``, called once per segment),
-        or a zero-centered ``pm.Normal.dist`` / ``pm.StudentT.dist`` whose
-        location is replaced by the segment latent. Any other dist, or a
-        non-zero location, raises :class:`~pymc_forecast.exceptions.HorizonError`.
+        Observation specification, dispatched in order:
+
+        - a pymc-extras ``Prior`` (``mu`` left unset; nested hyper-priors
+          shared across segments);
+        - a 4-argument factory ``(name, latent, dims, observed) -> RV``: a
+          callable with at least four positional parameters, or one that
+          binds four positional arguments but not one (e.g. a
+          ``functools.partial``). Parameter names do not matter;
+        - any other callable, called once per segment with the segment
+          latent as its first positional argument and returning an unnamed
+          ``.dist()``. A bare ``.dist`` classmethod is accepted only when that
+          parameter is ``mu`` (e.g. ``pm.Poisson.dist``); ``pm.StudentT.dist``
+          takes ``nu`` first and is rejected. The callable must not create
+          model variables: create them in the model body and close over them;
+        - a zero-centered ``pm.Normal.dist`` / ``pm.StudentT.dist`` whose
+          location is replaced by the segment latent.
+
+        Any other dist, a non-zero location, a model variable instead of a
+        ``.dist()``, or a ``.dist()`` depending on unnamed random variables
+        raises :class:`~pymc_forecast.exceptions.HorizonError`.
     latent
         Full-horizon predictor with time on axis 0.
     expected_observation
