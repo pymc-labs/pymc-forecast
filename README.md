@@ -16,7 +16,7 @@ rather than a 1:1 translation.
 > [issue tracker](https://github.com/pymc-labs/pymc-forecast/issues).
 
 **Documentation:** <https://pymc-labs.github.io/pymc-forecast/> — API reference and
-executed example notebooks (univariate, hierarchical, covariates, state-space).
+executed example notebooks (univariate, hierarchical, covariates, state-space, M5).
 
 ## Quickstart
 
