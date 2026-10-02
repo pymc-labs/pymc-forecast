@@ -69,5 +69,8 @@ The helper does not infer a missing-data or censoring mechanism.
 
 For sampled hidden states, use `markov_series`. For linear-Gaussian hidden
 states, the `pymc-extras` statespace backend can marginalize the state path. See the
-[ARMA](../examples/arma.ipynb) and [Holt-Winters](../examples/exponential_smoothing_state_space.ipynb)
-examples for observation-driven recursions.
+[ARMA](../examples/arma.ipynb), [Holt-Winters](../examples/exponential_smoothing_state_space.ipynb),
+and [censored demand](../examples/censored_demand.ipynb) examples for observation-driven
+recursions. The censored example is the update-gate pattern above: availability keeps a
+stockout zero out of the lag, and the likelihood contributes survival mass at a known cap
+instead of a density.
