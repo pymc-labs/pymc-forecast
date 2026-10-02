@@ -8,16 +8,15 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
-- Add the M5 evaluation loader (`load_m5`), the 12-level hierarchy and
-  competition scores, and the three starter-kit reconciliation models
-  (`TopDownModel`, `BottomUpModel`, `MiddleOutModel`) in `pymc_forecast.m5`.
-  The formulas follow the Pyro kit as ported by numpyro_forecast. Inference
-  is mean-field ADVI through `Forecaster`, not the kit's clipped minibatch
-  SVI, so posterior draws are not expected to match a NumPyro run. The
-  example notebook checks official weights on the full panel and fits a
-  hierarchy-preserving subset, with the bottom-up likelihood starting at
-  day 121. CI reruns that notebook on a synthetic panel and does not
-  download the competition files.
+- Add `load_m5` and an M5 forecasting example. The notebook defines the
+  12-level hierarchy, the competition scores, and the three starter-kit
+  reconciliation models. The formulas follow the Pyro kit as ported by
+  numpyro_forecast. Inference is mean-field ADVI through `Forecaster`, not
+  the kit's clipped minibatch SVI, so posterior draws are not expected to
+  match a NumPyro run. The notebook checks official weights on the full
+  panel and fits a hierarchy-preserving subset, with the bottom-up
+  likelihood starting at day 121. CI reruns that notebook on a synthetic
+  panel and does not download the competition files.
 
 - Fix `StatespaceForecaster.forecast` and `predict_in_sample` on current
   pymc-extras (verified on 0.15.1): the thinned posterior now carries the
