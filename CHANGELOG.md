@@ -8,6 +8,11 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- New example notebook — *Demand forecasting with a censored likelihood*: an
+  AR(2) whose lag filter and likelihood distinguish stockouts from a known
+  capacity cap, ported from the
+  [upstream censored-demand example](https://juanitorduz.github.io/numpyro_forecast/docs/examples/censored_demand.html).
+  CI executes the reduced window.
 - Fix `StatespaceForecaster.forecast` and `predict_in_sample` on current
   pymc-extras (verified on 0.15.1): the thinned posterior now carries the
   fit's `observed_data` and `constant_data` groups, which pymc-extras reads

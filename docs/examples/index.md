@@ -25,6 +25,9 @@ Executed end-to-end and re-run in CI with reduced sampling settings.
   forecasting, parameter recovery and expanding-window evaluation.
 - [Intermittent demand](intermittent_demand.ipynb) — Bernoulli occurrence and positive
   Gamma quantities, stockout zeros, a naive baseline and full-availability scenarios.
+- [Censored demand](censored_demand.ipynb) — an AR(2) with a right-censored normal
+  likelihood for a known shelf cap; stockout days are gated out of the lag filter,
+  and the same model trained as if the cap were an exact sale is the baseline.
 - [Comparing inference methods](inference_methods_comparison.ipynb) — the same ARMA
   model fit with NUTS, ADVI, full-rank ADVI and Pathfinder; diagnostics, timing and scores.
 
@@ -35,6 +38,7 @@ Executed end-to-end and re-run in CI with reduced sampling settings.
 forecasting_univariate
 arma
 intermittent_demand
+censored_demand
 inference_methods_comparison
 hierarchical_forecasting
 victoria_electricity
