@@ -27,8 +27,15 @@ Executed end-to-end and re-run in CI with reduced sampling settings.
   fit by Impulso's Minnesota prior and scored with an expanding-window backtest.
 - [Intermittent demand](intermittent_demand.ipynb) — Bernoulli occurrence and positive
   Gamma quantities, stockout zeros, a naive baseline and full-availability scenarios.
+- [Censored demand](censored_demand.ipynb) — an AR(2) with a right-censored normal
+  likelihood for a known shelf cap; stockout days are gated out of the lag filter,
+  and the same model trained as if the cap were an exact sale is the baseline.
 - [Comparing inference methods](inference_methods_comparison.ipynb) — the same ARMA
   model fit with NUTS, ADVI, full-rank ADVI and Pathfinder; diagnostics, timing and scores.
+- [M5 forecasting](m5_forecasting.ipynb) — top-down, bottom-up, and middle-out
+  reconciliation of a Walmart hierarchy: official-weight check on the full panel, then
+  the three starter-kit models fit, inspected, backtested with `backtest`, and scored with
+  the competition's weighted scaled CRPS on an 84-series panel with all 12 levels.
 
 ```{toctree}
 :hidden:
@@ -38,10 +45,12 @@ forecasting_univariate
 arma
 var
 intermittent_demand
+censored_demand
 inference_methods_comparison
 hierarchical_forecasting
 victoria_electricity
 exponential_smoothing_state_space
 scan_vs_statespace_local_level
 retail_stockouts
+m5_forecasting
 ```

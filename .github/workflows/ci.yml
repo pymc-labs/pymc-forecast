@@ -84,6 +84,7 @@ jobs:
               docs/examples/exponential_smoothing_state_space.ipynb
               docs/examples/inference_methods_comparison.ipynb
               docs/examples/intermittent_demand.ipynb
+              docs/examples/censored_demand.ipynb
           # The full gallery includes examples using ArviZ 1.x plotting APIs.
           - python-version: "3.12"
             notebooks: docs/examples/*.ipynb
@@ -95,7 +96,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/pymc_forecast
-          key: bart-od-v1
+          key: pymc-forecast-data-v2
       - run: uv sync --all-extras --group notebooks
       - name: Execute example notebooks (reduced settings)
         env:
