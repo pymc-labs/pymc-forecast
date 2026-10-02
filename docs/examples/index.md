@@ -23,6 +23,8 @@ Executed end-to-end and re-run in CI with reduced sampling settings.
   demand forecast at full availability.
 - [ARMA forecasting](arma.ipynb) — one observation/error recursion for filtering and
   forecasting, parameter recovery and expanding-window evaluation.
+- [VAR forecasting with Impulso](var.ipynb) — a VAR(2) on quarterly US growth rates,
+  fit by Impulso's Minnesota prior and scored with an expanding-window backtest.
 - [Intermittent demand](intermittent_demand.ipynb) — Bernoulli occurrence and positive
   Gamma quantities, stockout zeros, a naive baseline and full-availability scenarios.
 - [Comparing inference methods](inference_methods_comparison.ipynb) — the same ARMA
@@ -34,6 +36,7 @@ Executed end-to-end and re-run in CI with reduced sampling settings.
 
 forecasting_univariate
 arma
+var
 intermittent_demand
 inference_methods_comparison
 hierarchical_forecasting

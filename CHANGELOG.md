@@ -8,6 +8,10 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- Add an executed VAR example. Impulso fits the model; `backtest` scores the
+  density forecasts. Impulso is a `docs` and `notebooks` dependency, not a
+  core dependency.
+
 - Fix `StatespaceForecaster.forecast` and `predict_in_sample` on current
   pymc-extras (verified on 0.15.1): the thinned posterior now carries the
   fit's `observed_data` and `constant_data` groups, which pymc-extras reads
