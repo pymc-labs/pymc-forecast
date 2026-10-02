@@ -8,15 +8,20 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
-- Add `load_m5` and an M5 forecasting example. The notebook defines the
-  12-level hierarchy, the competition scores, and the three starter-kit
-  reconciliation models. The formulas follow the Pyro kit as ported by
-  numpyro_forecast. Inference is mean-field ADVI through `Forecaster`, not
-  the kit's clipped minibatch SVI, so posterior draws are not expected to
-  match a NumPyro run. The notebook checks official weights on the full
-  panel and fits a hierarchy-preserving subset, with the bottom-up
-  likelihood starting at day 121. CI reruns that notebook on a synthetic
-  panel and does not download the competition files.
+- Add `load_m5` and an M5 forecasting example. `load_m5` downloads the
+  competition files once and returns labeled `(time, series)` sales and
+  price panels plus the identifier, calendar, and official-weight tables.
+  The notebook defines the 12-level hierarchy, the competition scores
+  (weighted scaled CRPS and WSPL), and the three starter-kit reconciliation
+  models; the formulas follow the Pyro kit as ported by numpyro_forecast.
+  Inference is mean-field ADVI through `Forecaster` (JAX backend), not the
+  kit's clipped minibatch SVI, so posterior draws are not expected to match
+  a NumPyro run. The notebook checks the official weights on the full panel,
+  then fits an 84-series subset on which all 12 levels are distinct sets of
+  series (three best sellers per department in four stores), inspects the
+  posteriors with ArviZ, backtests the three models on the kit's three
+  windows with `backtest`, and scores the holdout. CI reruns the notebook
+  on a synthetic panel and does not download the competition files.
 
 - Fix `StatespaceForecaster.forecast` and `predict_in_sample` on current
   pymc-extras (verified on 0.15.1): the thinned posterior now carries the

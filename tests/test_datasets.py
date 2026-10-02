@@ -146,15 +146,23 @@ def test_load_m5_keeps_train_order_and_maps_weeks_explicitly(tmp_path, monkeypat
     loaded = load_m5(tmp_path)
 
     assert list(loaded.keys["id"]) == ["HOBBIES_1_001_CA_1", "FOODS_1_001_TX_1"]
+    assert loaded.sales.dims == ("time", "series")
+    assert loaded.price.dims == ("time", "series")
+    assert list(loaded.sales["series"].values) == list(loaded.keys["id"])
     np.testing.assert_array_equal(
-        loaded.sales,
+        loaded.sales["time"].values,
+        pd.to_datetime(["2011-01-29", "2011-01-30", "2011-01-31", "2011-02-01"]).to_numpy(),
+    )
+    np.testing.assert_array_equal(
+        loaded.sales.values,
         np.array([[1, 4], [2, 5], [3, 6], [7, 8]], dtype=np.float32),
     )
     expected_price = np.array(
         [[2.5, 3.5], [2.5, 3.5], [np.nan, np.nan], [4.5, np.nan]],
         dtype=np.float32,
     )
-    np.testing.assert_allclose(loaded.price, expected_price, equal_nan=True)
+    np.testing.assert_allclose(loaded.price.values, expected_price, equal_nan=True)
+    assert loaded.sales.dtype == np.float32
     assert loaded.calendar["date"].iloc[0] == pd.Timestamp("2011-01-29")
     assert list(loaded.weights["Level_id"]) == ["Level1"]
 
@@ -168,8 +176,8 @@ def test_load_m5_ignores_test_only_rows_and_leaves_missing_test_days_nan(tmp_pat
     missing = tmp_path / "missing"
     _plant_m5(missing, train_days=["d_1", "d_2", "d_3"], test_days=["d_4"], drop_test=True)
     loaded = load_m5(missing)
-    assert np.isnan(loaded.sales[3, 0])
-    assert loaded.sales[3, 1] == 8
+    assert np.isnan(loaded.sales.values[3, 0])
+    assert loaded.sales.values[3, 1] == 8
 
 
 def test_load_m5_rejects_bad_sales_files(tmp_path):

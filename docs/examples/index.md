@@ -28,8 +28,9 @@ Executed end-to-end and re-run in CI with reduced sampling settings.
 - [Comparing inference methods](inference_methods_comparison.ipynb) — the same ARMA
   model fit with NUTS, ADVI, full-rank ADVI and Pathfinder; diagnostics, timing and scores.
 - [M5 forecasting](m5_forecasting.ipynb) — top-down, bottom-up, and middle-out
-  reconciliation of a Walmart hierarchy: official-weight check on the full panel,
-  then the three starter-kit models fit with `Forecaster` on a smaller panel.
+  reconciliation of a Walmart hierarchy: official-weight check on the full panel, then
+  the three starter-kit models fit, inspected, backtested with `backtest`, and scored with
+  the competition's weighted scaled CRPS on an 84-series panel with all 12 levels.
 
 ```{toctree}
 :hidden:

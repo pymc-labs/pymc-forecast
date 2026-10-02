@@ -5,8 +5,8 @@ origin-destination panel. :func:`load_bart_weekly` and
 :func:`load_bart_weekly_by_origin` derive compact weekly examples from that
 source, :func:`load_victoria_electricity` reads a small CSV bundled with the
 package, and :func:`load_m5` downloads the M5 competition files once and
-returns dense sales and price arrays. All loaders return labeled arrays or
-tables.
+returns labeled sales and price panels. Every loader returns labeled arrays;
+:func:`load_m5` adds the identifier, calendar, and weight tables.
 """
 
 import importlib.resources
@@ -204,18 +204,20 @@ _DAY_COLUMN = re.compile(r"d_(\d+)")
 
 
 class M5Data(NamedTuple):
-    """M5 evaluation data as dense arrays plus the identifier and calendar tables.
+    """M5 evaluation data: labeled sales and price panels plus three tables.
 
-    ``sales`` and ``price`` are float32 arrays shaped ``(days, series)``, series
-    in sales-file order. ``price`` is the weekly shelf price repeated over the
-    days of ``wm_yr_wk``, and is NaN where the item was not listed. ``keys`` has
-    one row per series (``id`` is ``item_id`` and ``store_id`` joined by ``_``).
-    ``calendar`` has one row per day. ``weights`` is the official evaluation
-    weight table.
+    ``sales`` and ``price`` are float32 :class:`xarray.DataArray` panels with
+    dims ``("time", "series")``: the ``"time"`` coord is the calendar date of
+    each day and the ``"series"`` coord is the series ``id`` (``item_id`` and
+    ``store_id`` joined by ``_``), in sales-file order. ``price`` is the weekly
+    shelf price repeated over the days of ``wm_yr_wk``, NaN where the item
+    was not listed. ``keys`` has one row per series with the ``id`` and the
+    five hierarchy columns; ``calendar`` has one row per day; ``weights`` is
+    the official evaluation weight table.
     """
 
-    sales: np.ndarray
-    price: np.ndarray
+    sales: xr.DataArray
+    price: xr.DataArray
     keys: pd.DataFrame
     calendar: pd.DataFrame
     weights: pd.DataFrame
@@ -256,58 +258,96 @@ def _require_columns(frame: pd.DataFrame, columns: tuple[str, ...], *, source: s
         raise ValueError(msg)
 
 
-def _sales_frame(directory: Path) -> tuple[pd.DataFrame, list[str]]:
-    train = pd.read_csv(directory / "sales_train_evaluation.csv")
-    test = pd.read_csv(directory / "sales_test_evaluation.csv")
-    _require_columns(train, _M5_KEYS, source="sales_train_evaluation.csv")
-    _require_columns(test, _M5_KEYS, source="sales_test_evaluation.csv")
-    if train.duplicated(list(_M5_KEYS)).any() or test.duplicated(list(_M5_KEYS)).any():
-        msg = "sales files have duplicate item-store keys"
+def _read_sales(path: Path) -> tuple[pd.DataFrame, list[str]]:
+    """Read a sales file with the day columns as float32 (half the default int64)."""
+    header = pd.read_csv(path, nrows=0)
+    _require_columns(header, _M5_KEYS, source=path.name)
+    days = _day_columns(header.columns)
+    frame = pd.read_csv(path, usecols=[*_M5_KEYS, *days], dtype=dict.fromkeys(days, np.float32))
+    if frame.duplicated(list(_M5_KEYS)).any():
+        msg = f"{path.name} has duplicate item-store keys"
         raise ValueError(msg)
-    train_days = _day_columns(train.columns)
-    test_days = _day_columns(test.columns)
+    return frame, days
+
+
+def _sales_panel(directory: Path) -> tuple[pd.DataFrame, np.ndarray]:
+    """Series keys and the ``(days, series)`` float32 sales, train days then test days."""
+    train, train_days = _read_sales(directory / "sales_train_evaluation.csv")
+    test, test_days = _read_sales(directory / "sales_test_evaluation.csv")
     overlap = sorted(set(train_days) & set(test_days), key=lambda name: int(name.split("_")[1]))
     if overlap:
         msg = f"sales day columns overlap: {overlap[:3]}"
         raise ValueError(msg)
-    day_columns = _day_columns([*train_days, *test_days])
-    numbers = [int(name.split("_")[1]) for name in day_columns]
+    numbers = [int(name.split("_")[1]) for name in _day_columns([*train_days, *test_days])]
     if not numbers or numbers[0] != 1 or numbers != list(range(1, numbers[-1] + 1)):
         msg = "sales day columns must be the contiguous range d_1, d_2, ..."
         raise ValueError(msg)
-    merged = train.merge(test[list(_M5_KEYS) + test_days], on=list(_M5_KEYS), how="left")
-    keys = merged[list(_M5_KEYS)].copy()
+    keys = train[list(_M5_KEYS)].reset_index(drop=True)
     keys.insert(0, "id", keys["item_id"].astype(str) + "_" + keys["store_id"].astype(str))
     if keys["id"].duplicated().any():
         msg = "item_id and store_id do not identify a unique series"
         raise ValueError(msg)
-    sales = merged[day_columns].to_numpy(dtype=np.float32).T
-    return pd.concat([keys, pd.DataFrame(sales.T, columns=day_columns)], axis=1), day_columns
+    # Align the test rows on the train keys: a test-only row drops out, a
+    # missing test row is NaN on the evaluation days.
+    test_values = (
+        test.set_index(list(_M5_KEYS))[test_days]
+        .reindex(pd.MultiIndex.from_frame(keys[list(_M5_KEYS)]))
+        .to_numpy(dtype=np.float32)
+    )
+    sales = np.empty((len(train_days) + len(test_days), len(keys)), dtype=np.float32)
+    sales[: len(train_days)] = train[train_days].to_numpy(dtype=np.float32).T
+    sales[len(train_days) :] = test_values.T
+    return keys, sales
+
+
+def _level_codes(values: pd.Series, levels: pd.Index) -> np.ndarray:
+    """Position of each categorical value in ``levels``; -1 when absent or missing."""
+    categories = values.cat.categories.astype(str)
+    mapped = np.append(levels.get_indexer(categories), -1)  # trailing -1 catches NaN codes
+    return mapped[values.cat.codes.to_numpy()]
 
 
 def _expand_prices(directory: Path, keys: pd.DataFrame, calendar: pd.DataFrame) -> np.ndarray:
-    prices = pd.read_csv(directory / "sell_prices.csv")
+    """Weekly shelf prices repeated over the days, as a ``(days, series)`` float32 array.
+
+    The 6.8 million price rows are mapped to integer series and week codes
+    and scattered into a ``(weeks, series)`` table; a pivot on the string keys
+    would hold the same table behind object-dtype indexes several times over.
+    """
+    header = pd.read_csv(directory / "sell_prices.csv", nrows=0)
     _require_columns(
-        prices,
-        ("store_id", "item_id", "wm_yr_wk", "sell_price"),
-        source="sell_prices.csv",
+        header, ("store_id", "item_id", "wm_yr_wk", "sell_price"), source="sell_prices.csv"
     )
-    if prices.duplicated(["store_id", "item_id", "wm_yr_wk"]).any():
+    prices = pd.read_csv(
+        directory / "sell_prices.csv",
+        usecols=["store_id", "item_id", "wm_yr_wk", "sell_price"],
+        dtype={
+            "store_id": "category",
+            "item_id": "category",
+            "wm_yr_wk": np.int64,
+            "sell_price": np.float32,
+        },
+    )
+    stores = pd.Index(keys["store_id"].astype(str).unique())
+    items = pd.Index(keys["item_id"].astype(str).unique())
+    key_pair = stores.get_indexer(keys["store_id"].astype(str)) * len(items) + items.get_indexer(
+        keys["item_id"].astype(str)
+    )
+    store = _level_codes(prices["store_id"], stores)
+    item = _level_codes(prices["item_id"], items)
+    pair = np.where((store >= 0) & (item >= 0), store * len(items) + item, -1)
+    series = pd.Index(key_pair).get_indexer(pair)
+    calendar_weeks = pd.Index(calendar["wm_yr_wk"].astype(np.int64).unique())
+    week = calendar_weeks.get_indexer(prices["wm_yr_wk"])
+    # Rows for a series or a week outside the panel carry no information.
+    keep = (series >= 0) & (week >= 0)
+    cell = week[keep].astype(np.int64) * len(keys) + series[keep]
+    if np.unique(cell).size != cell.size:
         msg = "sell_prices.csv has duplicate store-item-week rows"
         raise ValueError(msg)
-    prices = prices.copy()
-    prices["wm_yr_wk"] = prices["wm_yr_wk"].astype(np.int64)
-    wide = prices.pivot(index=["store_id", "item_id"], columns="wm_yr_wk", values="sell_price")
-    order = pd.MultiIndex.from_frame(keys[["store_id", "item_id"]])
-    wide = wide.reindex(order)
-    weeks = calendar["wm_yr_wk"].astype(np.int64).to_numpy()
-    positions = wide.columns.get_indexer(weeks)
-    values = wide.to_numpy(dtype=np.float64)
-    price = np.full((len(keys), len(weeks)), np.nan, dtype=np.float32)
-    valid = positions >= 0
-    if valid.any():
-        price[:, valid] = values[:, positions[valid]]
-    return price.T
+    weekly = np.full((len(calendar_weeks), len(keys)), np.nan, dtype=np.float32)
+    weekly[week[keep], series[keep]] = prices["sell_price"].to_numpy()[keep]
+    return weekly[calendar_weeks.get_indexer(calendar["wm_yr_wk"].astype(np.int64))]
 
 
 def load_m5(cache_dir: str | Path | None = None) -> M5Data:
@@ -315,26 +355,27 @@ def load_m5(cache_dir: str | Path | None = None) -> M5Data:
 
     The files come from Nixtla's mirror of the competition data, pinned to
     commit ``72b8e7fd`` and checked against a SHA-256 digest. The archive is
-    about 50 MB; the dense sales and price arrays need roughly 500 MB. Pass
-    ``cache_dir`` to read an already extracted directory instead of the
-    default cache (``pooch.os_cache("pymc_forecast") / "m5"``). When every
-    competition file is already in that directory, nothing is downloaded.
+    about 50 MB and is extracted into ``pooch.os_cache("pymc_forecast") /
+    "m5"`` (``~/.cache/pymc_forecast/m5`` on Linux,
+    ``~/Library/Caches/pymc_forecast/m5`` on macOS). Pass ``cache_dir`` to
+    read an already extracted directory instead; when every competition file
+    is in that directory, nothing is downloaded. The two returned panels hold
+    about 480 MB; parsing the CSVs peaks at about 2 GB.
 
     Series order follows ``sales_train_evaluation.csv``. The test file is
-    left-joined onto it, so a test-only row is ignored and a missing test row
-    leaves NaN sales on the evaluation days. Weekly prices are mapped by
-    ``wm_yr_wk``; a calendar week absent from ``sell_prices.csv`` is NaN and
-    does not shift the other weeks.
+    aligned on the train keys, so a test-only row is ignored and a missing
+    test row leaves NaN sales on the evaluation days. Weekly prices are mapped
+    by ``wm_yr_wk``; a calendar week absent from ``sell_prices.csv`` is NaN
+    and does not shift the other weeks.
 
     Returns
     -------
     M5Data
-        Sales, prices, identifiers, calendar, and official evaluation weights.
+        Labeled sales and price panels, identifiers, calendar, and official
+        evaluation weights.
     """
     directory = _m5_directory(cache_dir)
-    frame, day_columns = _sales_frame(directory)
-    keys = frame[["id", *_M5_KEYS]].reset_index(drop=True)
-    sales = frame[day_columns].to_numpy(dtype=np.float32).T
+    keys, sales = _sales_panel(directory)
     calendar = pd.read_csv(directory / "calendar.csv", parse_dates=["date"])
     if len(calendar) < sales.shape[0]:
         msg = f"calendar has {len(calendar)} rows for {sales.shape[0]} sales days"
@@ -345,6 +386,9 @@ def load_m5(cache_dir: str | Path | None = None) -> M5Data:
         ("date", "wm_yr_wk", "snap_CA", "snap_TX", "snap_WI"),
         source="calendar.csv",
     )
+    if calendar["date"].duplicated().any():
+        msg = "calendar.csv has duplicate dates"
+        raise ValueError(msg)
     price = _expand_prices(directory, keys, calendar)
     weights = pd.read_csv(directory / "weights_evaluation.csv")
     _require_columns(
@@ -352,4 +396,11 @@ def load_m5(cache_dir: str | Path | None = None) -> M5Data:
         ("Level_id", "Agg_Level_1", "Agg_Level_2", "Dollar_Sales", "weight"),
         source="weights_evaluation.csv",
     )
-    return M5Data(sales=sales, price=price, keys=keys, calendar=calendar, weights=weights)
+    coords = {TIME_DIM: calendar["date"].to_numpy(), "series": keys["id"].to_numpy(dtype=str)}
+    return M5Data(
+        sales=xr.DataArray(sales, dims=(TIME_DIM, "series"), coords=coords, name="sales"),
+        price=xr.DataArray(price, dims=(TIME_DIM, "series"), coords=coords, name="price"),
+        keys=keys,
+        calendar=calendar,
+        weights=weights,
+    )
