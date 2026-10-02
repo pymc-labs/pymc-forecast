@@ -9,8 +9,10 @@ breaking change, made only in a minor release and called out here.
 ## Unreleased
 
 - Add an executed VAR example. Impulso fits the model; `backtest` scores the
-  density forecasts. Impulso is a `docs` and `notebooks` dependency, not a
-  core dependency.
+  density forecasts per fold and per series, with rolling-origin plots. Impulso
+  is a `docs` and `notebooks` dependency, not a core dependency.
+- Add `datasets.load_us_macro`: the quarterly US real GDP, consumption and
+  investment levels (statsmodels `macrodata`, public domain), bundled as a CSV.
 
 - Fix `StatespaceForecaster.forecast` and `predict_in_sample` on current
   pymc-extras (verified on 0.15.1): the thinned posterior now carries the

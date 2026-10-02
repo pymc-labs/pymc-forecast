@@ -10,7 +10,7 @@ the modules group the reference by responsibility.
 - [`pymc_forecast.evaluate`](evaluate.md) — Rolling/expanding-window backtesting: `backtest`, `BacktestResult`, `results_to_dataframe`.
 - [`pymc_forecast.metrics`](metrics.md) — Dim-aware forecast metrics: CRPS, pinball, interval score, coverage, MASE, `evaluate_forecast`.
 - [`pymc_forecast.features`](features.md) — Feature builders: Fourier design matrices and periodic tiling.
-- [`pymc_forecast.datasets`](datasets.md) — Example datasets: BART ridership and Victoria electricity demand.
+- [`pymc_forecast.datasets`](datasets.md) — Example datasets: BART ridership, Victoria electricity demand and US macro growth.
 - [`pymc_forecast.data`](data.md) — Labeled-array helpers: normalization to `DataArray`, time-index extension, alignment checks.
 - [`pymc_forecast.priors`](priors.md) — pymc-extras `Prior` interop: declarative, user-injectable priors for the model primitives.
 - [`pymc_forecast.gaussian`](gaussian.md) — Time-correlated Gaussian observation noise: `predict_mvn` and the explicit Gaussian conditional.
