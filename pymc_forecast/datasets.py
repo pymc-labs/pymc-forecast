@@ -3,12 +3,17 @@
 :func:`load_bart_od` downloads and caches the complete hourly BART
 origin-destination panel. :func:`load_bart_weekly` and
 :func:`load_bart_weekly_by_origin` derive compact weekly examples from that
-source, while :func:`load_victoria_electricity` reads a small CSV bundled with
-the package. All loaders return labeled arrays.
+source, :func:`load_victoria_electricity` reads a small CSV bundled with the
+package, and :func:`load_m5` downloads the M5 competition files once and
+returns dense sales and price arrays. All loaders return labeled arrays or
+tables.
 """
 
 import importlib.resources
+import re
+import zipfile
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -18,9 +23,11 @@ import xarray as xr
 from pymc_forecast.data import TIME_DIM
 
 __all__ = [
+    "M5Data",
     "load_bart_od",
     "load_bart_weekly",
     "load_bart_weekly_by_origin",
+    "load_m5",
     "load_victoria_electricity",
 ]
 
@@ -179,3 +186,170 @@ def load_victoria_electricity() -> tuple[xr.DataArray, xr.DataArray]:
         table[:, 1], dims=(TIME_DIM,), coords={TIME_DIM: index}, name="temperature"
     )
     return demand, temperature
+
+
+_M5_KEYS = ("item_id", "dept_id", "cat_id", "store_id", "state_id")
+_M5_FILES = (
+    "calendar.csv",
+    "sales_train_evaluation.csv",
+    "sales_test_evaluation.csv",
+    "sell_prices.csv",
+    "weights_evaluation.csv",
+)
+_M5_BASE_URL = (
+    "https://github.com/Nixtla/m5-forecasts/raw/72b8e7fd3b565b3c538adcb1d1a05117d8562d7e/datasets/"
+)
+_M5_SHA256 = "sha256:cc704ba15d6802f8262e6ec7d4c6041e4ad6366a94365e8c84f721e450eed774"
+_DAY_COLUMN = re.compile(r"d_(\d+)")
+
+
+class M5Data(NamedTuple):
+    """M5 evaluation data as dense arrays plus the identifier and calendar tables.
+
+    ``sales`` and ``price`` are float32 arrays shaped ``(days, series)``, series
+    in sales-file order. ``price`` is the weekly shelf price repeated over the
+    days of ``wm_yr_wk``, and is NaN where the item was not listed. ``keys`` has
+    one row per series (``id`` is ``item_id`` and ``store_id`` joined by ``_``).
+    ``calendar`` has one row per day. ``weights`` is the official evaluation
+    weight table.
+    """
+
+    sales: np.ndarray
+    price: np.ndarray
+    keys: pd.DataFrame
+    calendar: pd.DataFrame
+    weights: pd.DataFrame
+
+
+def _m5_directory(cache_dir: str | Path | None) -> Path:
+    directory = (
+        Path(pooch.os_cache("pymc_forecast")) / "m5" if cache_dir is None else Path(cache_dir)
+    )
+    directory.mkdir(parents=True, exist_ok=True)
+    if all((directory / name).is_file() for name in _M5_FILES):
+        return directory
+    fetcher = pooch.create(path=directory, base_url=_M5_BASE_URL, registry={"m5.zip": _M5_SHA256})
+    archive = Path(fetcher.fetch("m5.zip", progressbar=False))
+    with zipfile.ZipFile(archive) as archive_file:
+        archive_file.extractall(directory, members=list(_M5_FILES))
+    missing = [name for name in _M5_FILES if not (directory / name).is_file()]
+    if missing:
+        msg = f"M5 archive did not contain {missing}"
+        raise ValueError(msg)
+    return directory
+
+
+def _day_columns(columns) -> list[str]:
+    numbered = []
+    for name in columns:
+        match = _DAY_COLUMN.fullmatch(str(name))
+        if match:
+            numbered.append((int(match.group(1)), str(name)))
+    numbered.sort()
+    return [name for _, name in numbered]
+
+
+def _require_columns(frame: pd.DataFrame, columns: tuple[str, ...], *, source: str) -> None:
+    missing = [column for column in columns if column not in frame.columns]
+    if missing:
+        msg = f"{source} is missing {missing}"
+        raise ValueError(msg)
+
+
+def _sales_frame(directory: Path) -> tuple[pd.DataFrame, list[str]]:
+    train = pd.read_csv(directory / "sales_train_evaluation.csv")
+    test = pd.read_csv(directory / "sales_test_evaluation.csv")
+    _require_columns(train, _M5_KEYS, source="sales_train_evaluation.csv")
+    _require_columns(test, _M5_KEYS, source="sales_test_evaluation.csv")
+    if train.duplicated(list(_M5_KEYS)).any() or test.duplicated(list(_M5_KEYS)).any():
+        msg = "sales files have duplicate item-store keys"
+        raise ValueError(msg)
+    train_days = _day_columns(train.columns)
+    test_days = _day_columns(test.columns)
+    overlap = sorted(set(train_days) & set(test_days), key=lambda name: int(name.split("_")[1]))
+    if overlap:
+        msg = f"sales day columns overlap: {overlap[:3]}"
+        raise ValueError(msg)
+    day_columns = _day_columns([*train_days, *test_days])
+    numbers = [int(name.split("_")[1]) for name in day_columns]
+    if not numbers or numbers[0] != 1 or numbers != list(range(1, numbers[-1] + 1)):
+        msg = "sales day columns must be the contiguous range d_1, d_2, ..."
+        raise ValueError(msg)
+    merged = train.merge(test[list(_M5_KEYS) + test_days], on=list(_M5_KEYS), how="left")
+    keys = merged[list(_M5_KEYS)].copy()
+    keys.insert(0, "id", keys["item_id"].astype(str) + "_" + keys["store_id"].astype(str))
+    if keys["id"].duplicated().any():
+        msg = "item_id and store_id do not identify a unique series"
+        raise ValueError(msg)
+    sales = merged[day_columns].to_numpy(dtype=np.float32).T
+    return pd.concat([keys, pd.DataFrame(sales.T, columns=day_columns)], axis=1), day_columns
+
+
+def _expand_prices(directory: Path, keys: pd.DataFrame, calendar: pd.DataFrame) -> np.ndarray:
+    prices = pd.read_csv(directory / "sell_prices.csv")
+    _require_columns(
+        prices,
+        ("store_id", "item_id", "wm_yr_wk", "sell_price"),
+        source="sell_prices.csv",
+    )
+    if prices.duplicated(["store_id", "item_id", "wm_yr_wk"]).any():
+        msg = "sell_prices.csv has duplicate store-item-week rows"
+        raise ValueError(msg)
+    prices = prices.copy()
+    prices["wm_yr_wk"] = prices["wm_yr_wk"].astype(np.int64)
+    wide = prices.pivot(index=["store_id", "item_id"], columns="wm_yr_wk", values="sell_price")
+    order = pd.MultiIndex.from_frame(keys[["store_id", "item_id"]])
+    wide = wide.reindex(order)
+    weeks = calendar["wm_yr_wk"].astype(np.int64).to_numpy()
+    positions = wide.columns.get_indexer(weeks)
+    values = wide.to_numpy(dtype=np.float64)
+    price = np.full((len(keys), len(weeks)), np.nan, dtype=np.float32)
+    valid = positions >= 0
+    if valid.any():
+        price[:, valid] = values[:, positions[valid]]
+    return price.T
+
+
+def load_m5(cache_dir: str | Path | None = None) -> M5Data:
+    """Load the M5 evaluation panel, downloading and caching the archive once.
+
+    The files come from Nixtla's mirror of the competition data, pinned to
+    commit ``72b8e7fd`` and checked against a SHA-256 digest. The archive is
+    about 50 MB; the dense sales and price arrays need roughly 500 MB. Pass
+    ``cache_dir`` to read an already extracted directory instead of the
+    default cache (``pooch.os_cache("pymc_forecast") / "m5"``). When every
+    competition file is already in that directory, nothing is downloaded.
+
+    Series order follows ``sales_train_evaluation.csv``. The test file is
+    left-joined onto it, so a test-only row is ignored and a missing test row
+    leaves NaN sales on the evaluation days. Weekly prices are mapped by
+    ``wm_yr_wk``; a calendar week absent from ``sell_prices.csv`` is NaN and
+    does not shift the other weeks.
+
+    Returns
+    -------
+    M5Data
+        Sales, prices, identifiers, calendar, and official evaluation weights.
+    """
+    directory = _m5_directory(cache_dir)
+    frame, day_columns = _sales_frame(directory)
+    keys = frame[["id", *_M5_KEYS]].reset_index(drop=True)
+    sales = frame[day_columns].to_numpy(dtype=np.float32).T
+    calendar = pd.read_csv(directory / "calendar.csv", parse_dates=["date"])
+    if len(calendar) < sales.shape[0]:
+        msg = f"calendar has {len(calendar)} rows for {sales.shape[0]} sales days"
+        raise ValueError(msg)
+    calendar = calendar.iloc[: sales.shape[0]].reset_index(drop=True)
+    _require_columns(
+        calendar,
+        ("date", "wm_yr_wk", "snap_CA", "snap_TX", "snap_WI"),
+        source="calendar.csv",
+    )
+    price = _expand_prices(directory, keys, calendar)
+    weights = pd.read_csv(directory / "weights_evaluation.csv")
+    _require_columns(
+        weights,
+        ("Level_id", "Agg_Level_1", "Agg_Level_2", "Dollar_Sales", "weight"),
+        source="weights_evaluation.csv",
+    )
+    return M5Data(sales=sales, price=price, keys=keys, calendar=calendar, weights=weights)

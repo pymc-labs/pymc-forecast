@@ -95,7 +95,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/pymc_forecast
-          key: bart-od-v1
+          key: pymc-forecast-data-v2
       - run: uv sync --all-extras --group notebooks
       - name: Execute example notebooks (reduced settings)
         env:
