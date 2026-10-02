@@ -118,7 +118,9 @@ with `Horizon.from_data`. The primitives are `innovations`, `markov_series`,
 `fit_pathfinder` are the inference core; the forecaster classes call them
 and keep their constructors and attributes.
 
-VAR is deferred to an Impulso integration. Haar / DCT are deferred to
+VAR stays out of the core library. `docs/examples/var.ipynb` fits an Impulso
+VAR and scores it with `backtest`; Impulso is a docs/notebooks dependency.
+Haar / DCT are deferred to
 <https://github.com/pymc-labs/pymc-forecast/issues/58>.
 
 ## What gets dropped or shrinks
