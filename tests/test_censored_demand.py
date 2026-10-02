@@ -8,6 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import pymc as pm
+import pytensor
 import pytensor.tensor as pt
 import pytest
 import xarray as xr
@@ -101,6 +102,22 @@ def test_likelihood_is_density_survival_or_zero(ns):
         0.0,
     ]
     np.testing.assert_allclose(got, expected)
+
+
+@pytest.mark.parametrize("mu_value", [0.0, 2.2, 4.4])
+def test_censored_likelihood_and_gradients_remain_finite_in_tails(ns, mu_value):
+    value, sigma_value = 2.2, 0.05
+    mu, sigma = pt.dscalars("mu", "sigma")
+    logp = ns["censored_logp"](value, mu, sigma, 1, 1)
+    evaluate = pytensor.function([mu, sigma], [logp, *pt.grad(logp, [mu, sigma])])
+    got = evaluate(mu_value, sigma_value)
+
+    z = (value - mu_value) / sigma_value
+    log_survival = norm.logsf(z)
+    hazard = np.exp(norm.logpdf(z) - log_survival)
+    expected = [log_survival, hazard / sigma_value, z * hazard / sigma_value]
+    assert np.isfinite(got).all()
+    np.testing.assert_allclose(got, expected, rtol=1e-7, atol=1e-7)
 
 
 def test_swapped_input_labels_are_rejected(ns):

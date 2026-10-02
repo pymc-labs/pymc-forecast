@@ -273,7 +273,8 @@ def filtered_lag(y, pred, available, censored):
 def censored_logp(value, mu, sigma, censored, valid):
     """Normal density, or survival at the recorded value, or zero if invalid."""
     normal = pm.logp(pm.Normal.dist(mu, sigma), value)
-    survival = pm.math.logdiffexp(0.0, pm.logcdf(pm.Normal.dist(mu, sigma), value))
+    # Reflect the Normal so its log-CDF evaluates the survival tail directly.
+    survival = pm.logcdf(pm.Normal.dist(-mu, sigma), -value)
     point = pt.switch(censored, survival, normal)
     return pt.switch(valid, point, 0.0)
 
