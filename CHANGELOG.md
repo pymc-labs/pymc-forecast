@@ -15,7 +15,9 @@ breaking change, made only in a minor release and called out here.
   is mean-field ADVI through `Forecaster`, not the kit's clipped minibatch
   SVI, so posterior draws are not expected to match a NumPyro run. The
   example notebook checks official weights on the full panel and fits a
-  hierarchy-preserving subset; CI reruns that notebook on a smaller panel.
+  hierarchy-preserving subset, with the bottom-up likelihood starting at
+  day 121. CI reruns that notebook on a synthetic panel and does not
+  download the competition files.
 
 - Fix `StatespaceForecaster.forecast` and `predict_in_sample` on current
   pymc-extras (verified on 0.15.1): the thinned posterior now carries the

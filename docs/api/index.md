@@ -1,8 +1,9 @@
 # API reference
 
 The modules group the reference by responsibility. Names listed on the other
-pages are importable from the top-level `pymc_forecast` namespace; the M5
-hierarchy and starter-kit models live in `pymc_forecast.m5`.
+pages are importable from the top-level `pymc_forecast` namespace, except
+dataset loaders (`pymc_forecast.datasets`) and the M5 hierarchy
+(`pymc_forecast.m5`).
 
 - [`pymc_forecast.m5`](m5.md) — M5 hierarchy, competition scores, and the three starter-kit reconciliation models.
 - [`pymc_forecast.model`](model.md) — Model-building core: `Horizon`, `innovations`, `predict`, `build_model`, and the `ForecastingModel` facade.
