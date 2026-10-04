@@ -8,6 +8,8 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- Refresh the example-notebook gallery: shared ArviZ darkgrid style, 94% HDI as the ArviZ interval default, retina figures, and cycle colors (`C0`, `C1`, ...) instead of named series colors. `black` reference series are unchanged. Notebooks were re-executed at full sampling settings; CI still smoke-tests.
+
 - Add an executed VAR example. Impulso fits the model; `backtest` scores the
   density forecasts per fold and per series, with expanding-window forecast
   plots. Impulso is a `docs` and `notebooks` dependency, not a core dependency.
