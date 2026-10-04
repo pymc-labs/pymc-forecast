@@ -7,6 +7,7 @@ from pymc_forecast.datasets import (
     load_bart_weekly,
     load_bart_weekly_by_origin,
     load_m5,
+    load_us_macro,
     load_victoria_electricity,
 )
 
@@ -61,6 +62,18 @@ def test_victoria_electricity():
     assert (index[1] - index[0]) == pd.Timedelta(hours=1)
     assert 0 < float(demand.mean()) < 10  # GW scale
     assert np.isfinite(temperature.values).all()
+
+
+def test_us_macro():
+    levels = load_us_macro()
+    assert levels.dims == ("time", "series")
+    np.testing.assert_array_equal(levels["series"], ["realgdp", "realcons", "realinv"])
+    index = pd.DatetimeIndex(levels["time"].values)
+    assert index[0] == pd.Timestamp("1959-01-01")
+    assert index[-1] == pd.Timestamp("2009-07-01")
+    assert levels.sizes["time"] == 203
+    assert (levels > 0).all()  # levels in billions of chained dollars
+    assert float(levels.sel(series="realgdp")[0]) == 2710.349
 
 
 _CALENDAR_HEADER = (

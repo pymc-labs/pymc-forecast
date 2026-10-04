@@ -3,10 +3,10 @@
 :func:`load_bart_od` downloads and caches the complete hourly BART
 origin-destination panel. :func:`load_bart_weekly` and
 :func:`load_bart_weekly_by_origin` derive compact weekly examples from that
-source, :func:`load_victoria_electricity` reads a small CSV bundled with the
-package, and :func:`load_m5` downloads the M5 competition files once and
-returns labeled sales and price panels. Every loader returns labeled arrays;
-:func:`load_m5` adds the identifier, calendar, and weight tables.
+source, :func:`load_victoria_electricity` and :func:`load_us_macro` read small
+CSVs bundled with the package, and :func:`load_m5` downloads the M5 competition
+files once and returns labeled sales and price panels. Every loader returns
+labeled arrays; :func:`load_m5` adds the identifier, calendar, and weight tables.
 """
 
 import importlib.resources
@@ -28,11 +28,13 @@ __all__ = [
     "load_bart_weekly",
     "load_bart_weekly_by_origin",
     "load_m5",
+    "load_us_macro",
     "load_victoria_electricity",
 ]
 
 _HOURS_PER_WEEK = 24 * 7
 _VICTORIA_START = "2014-01-01"
+_US_MACRO_START = "1959-01-01"
 _BART_DATA = pooch.create(
     path=pooch.os_cache("pymc_forecast"),
     base_url="https://raw.githubusercontent.com/pyro-ppl/datasets/master/bart/",
@@ -186,6 +188,34 @@ def load_victoria_electricity() -> tuple[xr.DataArray, xr.DataArray]:
         table[:, 1], dims=(TIME_DIM,), coords={TIME_DIM: index}, name="temperature"
     )
     return demand, temperature
+
+
+def load_us_macro() -> xr.DataArray:
+    """Load quarterly US real GDP, consumption and investment levels.
+
+    The ``statsmodels`` ``macrodata`` panel (public domain; FRED, accessed
+    December 2009), restricted to the three real-activity series: 1959Q1 to
+    2009Q3, seasonally adjusted annual rates in billions of chained 2005 US$.
+    Bundled as a small CSV.
+
+    Returns
+    -------
+    xarray.DataArray
+        Levels with dims ``("time", "series")``; ``time`` is a quarter-start
+        ``DatetimeIndex`` and ``series`` is ``["realgdp", "realcons",
+        "realinv"]``.
+    """
+    source = importlib.resources.files("pymc_forecast").joinpath("data", "us_macro.csv")
+    with source.open("r", encoding="utf-8") as handle:
+        names = handle.readline().strip().split(",")
+        table = np.loadtxt(handle, delimiter=",", dtype=np.float64)
+    index = pd.date_range(_US_MACRO_START, periods=table.shape[0], freq="QS")
+    return xr.DataArray(
+        table,
+        dims=(TIME_DIM, "series"),
+        coords={TIME_DIM: index, "series": names},
+        name="levels",
+    )
 
 
 _M5_KEYS = ("item_id", "dept_id", "cat_id", "store_id", "state_id")

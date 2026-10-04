@@ -8,6 +8,14 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- Add an executed VAR example. Impulso fits the model; `backtest` scores the
+  density forecasts per fold and per series, with expanding-window forecast
+  plots. Impulso is a `docs` and `notebooks` dependency, not a core dependency.
+- Add `datasets.load_us_macro`: the quarterly US real GDP, consumption and
+  investment levels (statsmodels `macrodata`, public domain), bundled as a CSV.
+- Docs: enable the MyST `dollarmath` and `amsmath` extensions, so `$...$` and
+  `$$...$$` math in the example notebooks renders instead of showing as text.
+
 - New example notebook — *Demand forecasting with a censored likelihood*: an
   AR(2) whose lag filter and likelihood distinguish stockouts from a known
   capacity cap, ported from the

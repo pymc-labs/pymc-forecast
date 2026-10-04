@@ -45,7 +45,8 @@ intersphinx_mapping = {
 
 # Notebooks are committed fully executed; render their stored outputs.
 nb_execution_mode = "off"
-myst_enable_extensions = ["colon_fence", "deflist", "substitution"]
+# dollarmath renders the `$...$` / `$$...$$` math in the notebook markdown cells.
+myst_enable_extensions = ["amsmath", "colon_fence", "deflist", "dollarmath", "substitution"]
 
 # -- HTML output -------------------------------------------------------------
 
