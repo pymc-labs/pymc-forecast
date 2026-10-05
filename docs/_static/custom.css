@@ -1,0 +1,6 @@
+/* Retina notebook figures carry width/height attributes at half their pixel
+   size. The theme caps width at 100% of the article column; without
+   `height: auto` the fixed height attribute stretches the figure vertically. */
+div.cell_output img {
+  height: auto;
+}
