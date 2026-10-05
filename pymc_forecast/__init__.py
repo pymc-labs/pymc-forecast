@@ -81,7 +81,7 @@ from pymc_forecast.priors import PriorConfig
 from pymc_forecast.ssoe import SSOEResult, ssoe
 from pymc_forecast.statespace import StatespaceForecaster, StatespaceModel
 
-__version__ = "0.3.0.dev0"
+__version__ = "0.3.0"
 
 __all__ = [
     "CHAIN_DIM",

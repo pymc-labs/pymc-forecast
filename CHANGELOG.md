@@ -6,7 +6,7 @@ The dim/coord/group/variable names on prediction outputs (documented in
 [docs/schema.md](docs/schema.md)) are public API: any change to them is a
 breaking change, made only in a minor release and called out here.
 
-## Unreleased
+## 0.3.0 (2026-10-05)
 
 - Refresh the example-notebook gallery: shared ArviZ darkgrid style, 94% HDI as the ArviZ interval default, retina figures, and cycle colors (`C0`, `C1`, ...) instead of named series colors. `black` reference series are unchanged. Notebooks were re-executed at full sampling settings; CI still smoke-tests.
 
@@ -42,8 +42,8 @@ breaking change, made only in a minor release and called out here.
   fit's `observed_data` and `constant_data` groups, which pymc-extras reads
   to recover the fit coords, observed data, and exogenous inputs.
 - **Breaking** ([#57](https://github.com/pymc-labs/pymc-forecast/issues/57)).
-  `__version__` is `0.3.0.dev0`; release this cutover as `0.3.0` (`0.2.0` is
-  the published release and does not include it). Prediction schema names did not change.
+  This cutover ships in `0.3.0`; `0.2.0` does not include it. Prediction
+  schema names did not change.
   - Model signature `(h, covariates)` to `(covariates, data=None)`.
   - `ForecastingModel.model(self, h, covariates)` to `model(self, covariates, data=None)`.
   - `time_series` removed. Use `innovations`. A `.dist()` or a pymc-extras `Prior`, not an `RVFactory`. A `.dist()`'s parameters broadcast against `("time", *dims)`, so per-series scales and multivariate dists work. A model variable passed where a `.dist()` is expected (e.g. `pm.Normal("raw", ...)`), or a `.dist()` whose parameters depend on random variables that are not in the model, is rejected at registration with the offending name.
