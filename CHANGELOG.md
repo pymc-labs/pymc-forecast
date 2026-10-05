@@ -6,6 +6,13 @@ The dim/coord/group/variable names on prediction outputs (documented in
 [docs/schema.md](docs/schema.md)) are public API: any change to them is a
 breaking change, made only in a minor release and called out here.
 
+## Unreleased
+
+- Docs: notebook figures no longer render vertically stretched. Retina outputs
+  carry `width`/`height` attributes; the theme capped the width but kept the
+  fixed height. `docs/_static/custom.css` sets `height: auto` on cell-output
+  images.
+
 ## 0.3.0 (2026-10-05)
 
 - Refresh the example-notebook gallery: shared ArviZ darkgrid style, 94% HDI as the ArviZ interval default, retina figures, and cycle colors (`C0`, `C1`, ...) instead of named series colors. `black` reference series are unchanged. Notebooks were re-executed at full sampling settings; CI still smoke-tests.
