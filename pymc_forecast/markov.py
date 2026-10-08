@@ -91,38 +91,44 @@ def markov_series(
 
     Parameters
     ----------
-    h
+    h : pymc_forecast.model.Horizon
         The horizon of the current model build.
-    name
+    name : str
         Base variable name of the in-sample latent; the forecast segment is
         named ``f"{name}_future"``.
-    init
+    init : float, array_like or pytensor.tensor.TensorVariable
         Initial state fed to the first transition — a constant or a model
-        variable (e.g. ``pm.Normal("z0", 0, 1)``).
-    transition
+        variable (e.g. ``pm.Normal("z0", 0, 1)``). Cast to float64 inside the
+        scan.
+    transition : callable
         ``(z_prev, *params) -> dist`` (with ``xs``:
         ``(z_prev, x_t, *params) -> dist``). Must return a ``.dist()``
         distribution for the next step.
-    params
+    params : sequence, default ``()``
         Every random variable the transition uses (beyond the state), passed
         as explicit generative-graph inputs. Deterministic constants may be
         closed over freely.
-    xs
-        Optional exogenous inputs over the full horizon, time on axis 0
-        (numpy array or DataArray).
-    dims
+    xs : array_like, optional
+        Exogenous inputs, purely positional: time on axis 0 (any array-like,
+        or an object with ``.values`` such as a ``DataArray``, whose dim names
+        and coords are ignored), cast to float64. Must have at least
+        ``h.duration`` rows; extra rows are ignored. ``None`` means no inputs.
+    dims : tuple of str, default ``()``
         Extra (non-time) dims of the per-step state, e.g. ``("series",)``.
 
     Returns
     -------
-    TensorVariable
-        The latent over the full horizon, time on axis 0.
+    pytensor.tensor.TensorVariable
+        The latent over the full horizon, time on axis 0. When
+        ``h.future == 0`` this is the registered model variable ``name``
+        itself; otherwise it is an unnamed concatenation of ``name`` and
+        ``{name}_future``.
 
     Raises
     ------
-    HorizonError
-        When forecasting without observed data, or when ``xs`` does not span
-        the full horizon.
+    pymc_forecast.exceptions.HorizonError
+        If forecasting (``h.future > 0``) without observed data, or if ``xs``
+        has fewer than ``h.duration`` rows along axis 0.
     """
     if h.future > 0 and h.data is None:
         msg = "markov_series requires observed data when forecasting"

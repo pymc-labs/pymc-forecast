@@ -80,7 +80,9 @@ class StatespaceModel(PriorConfig, abc.ABC):
     Both phases receive the normalized training ``data`` and ``covariates`` as
     labeled DataArrays — ``statespace`` so the component graph can be sized
     from them (series count, regression features), ``priors`` so priors can be
-    informed by them (as with ``initial_level_trend`` above). A model with a
+    informed by them (as with ``initial_level_trend`` above). For a fit
+    without covariates, ``covariates`` is a zero-width DataArray with dims
+    ``("time", "covariate")``, never ``None``. A model with a
     ``st.Regression`` component registers its feature matrix with
     ``pm.Data(name, ...)`` inside ``priors``, where ``name`` is the entry in
     ``ss_mod.data_names``; at forecast time the adapter feeds the future
@@ -91,11 +93,32 @@ class StatespaceModel(PriorConfig, abc.ABC):
     ``default_priors``, create them inside :meth:`priors` with
     ``self.create_prior(name)``, and let callers override any subset with
     ``priors=`` when constructing the model object.
+
+    Parameters
+    ----------
+    priors : mapping, optional
+        Prior specs by name, merged over ``default_priors`` (see
+        :class:`~pymc_forecast.priors.PriorConfig`); ``None`` keeps the
+        defaults.
     """
 
     @abc.abstractmethod
     def statespace(self, data: xr.DataArray, covariates: xr.DataArray):
-        """Build and return the ``PyMCStateSpace`` (component sum + ``.build()``)."""
+        """Build and return the ``PyMCStateSpace`` (component sum + ``.build()``).
+
+        Parameters
+        ----------
+        data : xarray.DataArray
+            Normalized training data, ``"time"`` first.
+        covariates : xarray.DataArray
+            Training-window covariates (zero-width for a covariate-free fit).
+
+        Returns
+        -------
+        object
+            A built ``pymc_extras`` ``PyMCStateSpace`` whose ``k_endog`` equals
+            the data width (1 for 1-D data, else the size of the non-time dim).
+        """
 
     @abc.abstractmethod
     def priors(self, ss_mod, data: xr.DataArray, covariates: xr.DataArray) -> None:
@@ -103,6 +126,15 @@ class StatespaceModel(PriorConfig, abc.ABC):
 
         Called inside a ``pm.Model`` whose coords are ``ss_mod.coords``; the
         adapter calls ``build_statespace_graph`` afterwards.
+
+        Parameters
+        ----------
+        ss_mod : object
+            The ``PyMCStateSpace`` returned by :meth:`statespace`.
+        data : xarray.DataArray
+            Normalized training data, ``"time"`` first.
+        covariates : xarray.DataArray
+            Training-window covariates (zero-width for a covariate-free fit).
         """
 
 
@@ -165,58 +197,83 @@ class StatespaceForecaster(HMCForecaster):
     An :class:`~pymc_forecast.forecaster.HMCForecaster` whose training model
     is built through the statespace lifecycle instead of
     :func:`~pymc_forecast.model.build_model`: fit on construction with NUTS,
-    :meth:`draw_posterior`, :meth:`forecast` returning a labeled
+    ``draw_posterior``, :meth:`forecast` returning a labeled
     ``predictions`` group, :meth:`predict_in_sample` — so it drops into
     :func:`~pymc_forecast.evaluate.backtest` via
     ``forecaster_cls=StatespaceForecaster``.
 
-    pymc-extras is imported lazily, so constructing this class is the opt-in
-    that requires it.
+    pymc-extras is imported on construction, so constructing this class is
+    the opt-in that requires it.
 
     Parameters
     ----------
-    model_fn
+    model_fn : StatespaceModel
         The model definition, a :class:`StatespaceModel` (or any object with
         its ``statespace`` / ``priors`` methods).
-    data
-        Observed training data (univariate series or 2-d with a named series
-        dim), or ``None`` to construct unfitted and call
-        :meth:`~pymc_forecast.forecaster.BaseForecaster.fit` later.
-    covariates
-        Covariates covering (at least) the training window, passed through to
-        the model definition; surplus future steps are ignored during fitting.
-        ``None`` for models without covariates.
-    draws, tune, chains
-        MCMC schedule (defaults ``1000`` / ``1000`` / ``2``).
-    nuts_sampler
-        NUTS backend: ``"pymc"`` (default), ``"nutpie"``, ``"numpyro"``, or
-        ``"blackjax"``.
-    random_seed
-        Seed for the fit.
-    progressbar
-        Show the sampling progress bar.
-    sample_kwargs
+    data : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like, optional
+        Observed training series (univariate or 2-D with a named series dim),
+        normalized with :func:`~pymc_forecast.data.as_dataarray`, or ``None``
+        to construct unfitted and call ``fit`` later.
+    covariates : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like, optional
+        Covariates on the same ``"time"`` coordinate as ``data``, covering (at
+        least) the training window, passed through to the model definition;
+        rows past the training window are dropped during fitting. ``None`` for
+        models without covariates.
+    draws : int, default 1000
+        Number of posterior draws per chain.
+    tune : int, default 1000
+        Number of tuning steps per chain.
+    chains : int, default 2
+        Number of chains.
+    nuts_sampler : {"pymc", "nutpie", "numpyro", "blackjax"}, default "pymc"
+        NUTS backend, forwarded to ``pm.sample``.
+    random_seed : int or numpy.random.Generator, optional
+        Seed for the fit, forwarded to ``pm.sample``; also the default seed
+        for later ``fit`` calls.
+    progressbar : bool, optional
+        Show the sampling progress bar; ``None`` means off. May instead be
+        given in ``sample_kwargs``, but not both.
+    sample_kwargs : mapping, optional
         Extra keyword arguments for ``pm.sample``. ``progressbar`` is
         accepted here for compatibility, but the direct argument is preferred
         (passing both raises).
-    build_kwargs
-        Extra keyword arguments for ``build_statespace_graph``. Which keywords
-        exist depends on the installed pymc-extras: older releases accept
-        e.g. ``mvn_method``; 0.15.1 accepts none.
-    forecast_kwargs
-        Extra keyword arguments for ``PyMCStateSpace.forecast``, such as
-        ``filter_output`` or ``mvn_method``. Horizon, scenario, seed,
-        verbosity, and progress are managed by the adapter and cannot be
-        overridden here.
+    build_kwargs : mapping, optional
+        Extra keyword arguments forwarded to ``build_statespace_graph``; which
+        keywords exist depends on the installed pymc-extras release.
+    forecast_kwargs : mapping, optional
+        Extra keyword arguments forwarded to ``PyMCStateSpace.forecast``
+        (not applied to :meth:`predict_in_sample`). ``start``, ``periods``,
+        ``end``, ``scenario``, ``random_seed``, ``verbose`` and
+        ``progressbar`` are managed by the adapter and cannot be given here.
 
     Attributes
     ----------
-    ss_mod
-        The built ``PyMCStateSpace``.
-    model
-        The ``pm.Model`` holding priors and the Kalman-filter likelihood.
-    idata
-        The full MCMC result.
+    model_fn : StatespaceModel
+        The model definition passed to the constructor.
+    ss_mod : object
+        The built ``PyMCStateSpace`` (set by fitting).
+    model : pymc.Model or None
+        The ``pm.Model`` holding priors and the Kalman-filter likelihood;
+        ``None`` before the first fit.
+    idata : xarray.DataTree or arviz.InferenceData
+        The full MCMC result, as returned by ``pm.sample`` (set by fitting).
+    approx : None
+        Always ``None`` (set by fitting).
+    losses : None
+        Always ``None`` (set by fitting).
+
+    Raises
+    ------
+    pymc_forecast.exceptions.OptionalDependencyError
+        If ``pymc_extras.statespace`` cannot be imported.
+    ValueError
+        If ``forecast_kwargs`` contains an adapter-managed key, ``progressbar``
+        is given both directly and in ``sample_kwargs``, or ``covariates`` is
+        given without ``data``.
+    pymc_forecast.exceptions.AlignmentError
+        If (when fitting) ``data`` or ``covariates`` cannot be normalized, the
+        data has more than two dims, the covariates do not align with it, or
+        ``ss_mod.k_endog`` does not match the data width.
     """
 
     def __init__(
@@ -373,43 +430,79 @@ class StatespaceForecaster(HMCForecaster):
 
         Parameters
         ----------
-        covariates
+        covariates : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like, optional
             Covariates spanning training window + forecast horizon (time
-            coords must extend the training data's). Non-time dimensions and
+            coords must extend the training data's), normalized with
+            :func:`~pymc_forecast.data.as_dataarray`; the steps past the
+            training window define the horizon. Non-time dimensions and
             coordinate names/order must match the training covariates.
-        num_samples
-            Number of posterior draws (and forecast samples); default 100.
-            Mutually exclusive with ``posterior``.
-        horizon
-            Number of steps to forecast past the training data.
-        future_index
+            ``None`` when the horizon comes from another argument.
+        num_samples : int, optional
+            Number of posterior draws (and forecast samples) to sample when
+            ``posterior`` is not given; ``None`` means 100. Mutually exclusive
+            with ``posterior``.
+        horizon : int, optional
+            Number of steps to forecast past the training data (must be at
+            least 1). Rejected for models with exogenous inputs.
+        future_index : array_like, optional
             Time coordinate values of the forecast horizon, supplied at
-            forecast time (models without exogenous inputs only) — the
+            forecast time (rejected for models with exogenous inputs) — the
             covariate-free half of the predict-time horizon capability;
             ``future_covariates`` is the with-exogenous half.
-        future_covariates
-            Covariates covering only the forecast horizon, with a time index
+        future_covariates : xarray.DataArray, pandas.DataFrame or array_like, optional
+            Covariates (any input :func:`~pymc_forecast.data.as_dataarray`
+            accepts, including a ``pandas.Series``) covering only the forecast
+            horizon, with a time index
             lying after the training window; fed through as the forecast
             scenario. Structure (dims, covariate names and order) must match
             the training covariates.
-        posterior
-            A fixed posterior to condition on (any shape
-            :func:`~pymc_forecast.prediction.posterior_dataset` accepts,
-            typically from ``draw_posterior``); passing the same posterior to
-            ``predict_in_sample`` and ``forecast`` makes the calls
-            draw-coherent.
-        var_names
-            Subset of prediction variables to keep (``"forecast"``,
-            ``"forecast_latent"``). Default: both.
-        random_seed, progressbar
-            Passed through to ``PyMCStateSpace.forecast``.
+        posterior : xarray.Dataset, xarray.DataTree or arviz.InferenceData, optional
+            A fixed posterior to condition on: a posterior Dataset or any
+            object with a ``posterior`` group
+            (:func:`~pymc_forecast.prediction.posterior_dataset`), typically
+            from ``draw_posterior``; used as given, not thinned. Passing the
+            same posterior to ``predict_in_sample`` and ``forecast`` makes the
+            calls draw-coherent. Mutually exclusive with ``num_samples``.
+        var_names : sequence of str, optional
+            Subset of ``{"forecast", "forecast_latent"}`` to keep (a bare
+            string is not accepted as a single name); ``None`` keeps both.
+        random_seed : int or numpy.random.Generator, optional
+            Seeds both the posterior draws (when ``posterior`` is not given)
+            and ``PyMCStateSpace.forecast``.
+        progressbar : bool, default False
+            Show the sampling progress bar (forwarded to
+            ``PyMCStateSpace.forecast``).
 
         Returns
         -------
-        DataTree
-            With a ``predictions`` group holding ``"forecast"`` (dims
-            ``(chain, draw, time_future, ...)``) and the latent state
-            trajectories as ``"forecast_latent"``.
+        xarray.DataTree
+            Always a DataTree, with a ``predictions`` group holding
+            ``"forecast"`` (dims ``(chain, draw, time_future)``, plus the
+            series dim for 2-D data) and the latent state trajectories as
+            ``"forecast_latent"`` (dims ``(chain, draw, time_future, state)``).
+
+        Raises
+        ------
+        pymc_forecast.exceptions.NotFittedError
+            If the forecaster has not been fitted.
+        ValueError
+            If not exactly one of ``covariates``, ``horizon``, ``future_index``
+            and ``future_covariates`` is given, if both ``posterior`` and
+            ``num_samples`` are given, or if a posterior draw count is not
+            positive.
+        pymc_forecast.exceptions.AlignmentError
+            If the horizon arguments or covariates are invalid or misaligned
+            (see ``extend_time_index``, ``concat_time_index``,
+            ``concat_covariates``), or if ``horizon`` / ``future_index`` is
+            used with a model that has an exogenous input.
+        pymc_forecast.exceptions.HorizonError
+            If the resulting horizon is empty (e.g. ``horizon=0``).
+        NotImplementedError
+            If the model has more than one exogenous input.
+        KeyError
+            If ``var_names`` contains an unknown name.
+        TypeError
+            If ``posterior`` has no ``posterior`` group.
         """
         self._require_fitted()
         provided = sum(
@@ -483,15 +576,39 @@ class StatespaceForecaster(HMCForecaster):
         the full training window) — the statespace analogue of replaying
         in-sample latents and resampling the observation noise.
 
-        ``num_samples`` defaults to 100 and is mutually exclusive with
-        ``posterior``, a fixed posterior to condition on (see
-        :meth:`forecast` for the draw-coherence semantics).
+        Parameters
+        ----------
+        num_samples : int, optional
+            Number of posterior draws to sample when ``posterior`` is not
+            given; ``None`` means 100. Mutually exclusive with ``posterior``.
+        posterior : xarray.Dataset, xarray.DataTree or arviz.InferenceData, optional
+            A fixed posterior to condition on: a posterior Dataset or any
+            object with a ``posterior`` group
+            (:func:`~pymc_forecast.prediction.posterior_dataset`); used as
+            given, not thinned (see :meth:`forecast` for the draw-coherence
+            semantics). Mutually exclusive with ``num_samples``.
+        random_seed : int or numpy.random.Generator, optional
+            Seeds both the posterior draws (when ``posterior`` is not given)
+            and the conditional posterior sampling.
+        progressbar : bool, default False
+            Show the sampling progress bar.
 
         Returns
         -------
-        DataTree
-            With a ``posterior_predictive`` group holding ``"obs"`` (dims
-            ``(chain, draw, time, ...)``).
+        xarray.DataTree
+            Always a DataTree, with a ``posterior_predictive`` group holding
+            only ``"obs"`` (dims ``(chain, draw, time)``, plus the series dim
+            for 2-D data).
+
+        Raises
+        ------
+        pymc_forecast.exceptions.NotFittedError
+            If the forecaster has not been fitted.
+        ValueError
+            If both ``posterior`` and ``num_samples`` are given, or a
+            posterior draw count is not positive.
+        TypeError
+            If ``posterior`` has no ``posterior`` group.
         """
         self._require_fitted()
         posterior = self._resolve_posterior(posterior, num_samples, random_seed)

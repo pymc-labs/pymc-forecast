@@ -3,9 +3,9 @@
 Three inference backends behind one interface: :class:`Forecaster`
 (variational, ADVI by default), :class:`HMCForecaster` (MCMC via
 ``pm.sample``), and :class:`PathfinderForecaster` (pymc-extras Pathfinder).
-Construction fits the model on ``(data, covariates)``; :meth:`~BaseForecaster.forecast`
+Construction fits the model on ``(data, covariates)``; ``forecast``
 then rebuilds the model over extended covariates and samples the horizon.
-Construct without data to defer the fit (:meth:`~BaseForecaster.fit`).
+Construct without data to defer the fit (call ``fit`` later).
 """
 
 import abc
@@ -65,18 +65,41 @@ class BaseForecaster(abc.ABC):
 
     Parameters
     ----------
-    model_fn
+    model_fn : callable or pymc_forecast.model.ForecastingModel
         The model body (``(covariates, data=None) -> None`` or a
         :class:`~pymc_forecast.model.ForecastingModel`).
-    data
-        Observed training data, or ``None`` to construct unfitted and call
-        :meth:`fit` later.
-    covariates
-        Covariates covering (at least) the training window; surplus future
-        steps are ignored during fitting. ``None`` for models without
-        covariates.
-    random_seed
-        Seed for the fit.
+    data : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like, optional
+        Observed training series, normalized with
+        :func:`~pymc_forecast.data.as_dataarray` (``"time"`` first; 2-D input
+        gets a ``"series"`` dim). ``None`` constructs the forecaster unfitted;
+        call :meth:`fit` later.
+    covariates : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like, optional
+        Covariates on the same ``"time"`` coordinate as ``data``, covering (at
+        least) the training window (normalized with ``as_dataarray``; 2-D input
+        gets a ``"covariate"`` dim). Rows past the training window are dropped
+        during fitting. ``None`` for models without covariates.
+    random_seed : int, optional
+        Seed for the fit on construction; also the default seed for later
+        :meth:`fit` calls.
+
+    Attributes
+    ----------
+    model_fn : callable or pymc_forecast.model.ForecastingModel
+        The model body passed to the constructor.
+    model : pymc.Model or None
+        The training model built by the last :meth:`fit`; ``None`` before the
+        first fit.
+
+    Raises
+    ------
+    ValueError
+        If ``covariates`` is given without ``data``.
+    pymc_forecast.exceptions.AlignmentError
+        If (when fitting) ``data`` or ``covariates`` cannot be normalized or do
+        not align along ``"time"``.
+    pymc_forecast.exceptions.HorizonError
+        If (when fitting) the model body does not register ``"obs"`` or
+        misuses the model primitives.
     """
 
     def __init__(self, model_fn, data=None, covariates=None, *, random_seed=None) -> None:
@@ -109,10 +132,45 @@ class BaseForecaster(abc.ABC):
 
         Parameters
         ----------
-        data, covariates
-            As in the constructor (``data`` is required here).
-        random_seed
-            Seed for the fit; defaults to the constructor's ``random_seed``.
+        data : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like
+            Observed training series, normalized with
+            :func:`~pymc_forecast.data.as_dataarray` (``"time"`` first; 2-D
+            input gets a ``"series"`` dim).
+        covariates : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like, optional
+            Covariates on the same ``"time"`` coordinate as ``data``, covering
+            (at least) the training window (normalized with ``as_dataarray``;
+            2-D input gets a ``"covariate"`` dim). Rows past the training
+            window are dropped. ``None`` for models without covariates.
+        random_seed : int, optional
+            Seed for the fit; ``None`` uses the constructor's ``random_seed``.
+
+        Returns
+        -------
+        BaseForecaster
+            The fitted instance (``self``).
+
+        Raises
+        ------
+        pymc_forecast.exceptions.AlignmentError
+            If ``data`` or ``covariates`` cannot be normalized, or the
+            covariates do not align with ``data`` along ``"time"``.
+        pymc_forecast.exceptions.HorizonError
+            If the model body does not register ``"obs"`` or misuses the model
+            primitives.
+        pymc_forecast.exceptions.MethodResolutionError
+            If the backend cannot resolve the configured inference method
+            (e.g. an unknown VI method name for ``Forecaster``).
+        pymc_forecast.exceptions.OptionalDependencyError
+            If the backend's optional dependency (JAX for
+            ``Forecaster(backend="jax")``, pymc-extras for
+            ``PathfinderForecaster``) is not installed.
+
+        Warns
+        -----
+        UserWarning
+            For ``Forecaster``, when the post-fit heuristic finds the ELBO
+            still descending (possible underconvergence) or the loss history
+            contains non-finite values.
         """
         self._is_fitted = False
         self._data, self._covariates = _training_inputs(data, covariates)
@@ -156,11 +214,11 @@ class BaseForecaster(abc.ABC):
 
         Parameters
         ----------
-        num_samples
+        num_samples : int
             Number of posterior draws.
-        random_seed
+        random_seed : int or numpy.random.Generator, optional
             Seed for posterior sampling.
-        batch_size
+        batch_size : int, optional
             For backends that generate posterior draws on demand (currently
             :class:`Forecaster`), draw at most this many at once and
             concatenate the host-backed xarray chunks. On wide panels this
@@ -170,7 +228,22 @@ class BaseForecaster(abc.ABC):
             ``batch_size`` argument of :meth:`forecast` /
             :meth:`predict_in_sample`. ``None`` keeps the single-shot path.
             Backends whose posterior is already materialized (HMC and
-            Pathfinder) thin it once and do not need this memory knob.
+            Pathfinder) thin it once and do not need this memory knob; the
+            value is still validated on every backend.
+
+        Returns
+        -------
+        xarray.Dataset
+            Posterior with a single chain (``chain`` size 1) and
+            ``num_samples`` draws.
+
+        Raises
+        ------
+        pymc_forecast.exceptions.NotFittedError
+            If the forecaster has not been fitted.
+        ValueError
+            If ``batch_size`` is not positive, or (HMC/Pathfinder) if
+            ``num_samples`` is not positive.
         """
         self._require_fitted()
         return _draw_batched(
@@ -222,52 +295,93 @@ class BaseForecaster(abc.ABC):
 
         Parameters
         ----------
-        covariates
+        covariates : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like, optional
             Covariates spanning training window + forecast horizon (time coords
-            must extend the training data's). Non-time dimensions and coordinate
-            names/order must match the training covariates, as with
+            must extend the training data's), normalized with
+            :func:`~pymc_forecast.data.as_dataarray`; the steps past the
+            training window define the horizon. Non-time dimensions and
+            coordinate names/order must match the training covariates, as with
             ``future_covariates``; reordered or renamed columns are rejected
-            before posterior sampling.
-        num_samples
-            Number of posterior draws (and forecast samples); default 100.
-            Mutually exclusive with ``posterior``.
-        horizon
-            Number of steps to forecast past the training data (covariate-free
-            models only).
-        future_index
-            Time coordinate values of the forecast horizon (covariate-free
-            models only): strictly increasing values lying after the training
-            window, e.g. a ``DatetimeIndex`` of the period to predict. The
-            horizon length is derived from it, so it need not be known at fit
-            time. Forecast steps are drawn consecutively and labeled with
+            before posterior sampling. ``None`` when the horizon comes from
+            another argument.
+        num_samples : int, optional
+            Number of posterior draws (and forecast samples) to sample when
+            ``posterior`` is not given; ``None`` means 100. Mutually exclusive
+            with ``posterior``.
+        horizon : int, optional
+            Number of steps to forecast past the training data (models fit
+            without covariates only). Must be at least 1, and the training time
+            index must have an inferable spacing.
+        future_index : array_like, optional
+            Time coordinate values of the forecast horizon (models fit without
+            covariates only): strictly increasing values lying after the
+            training window, e.g. a ``DatetimeIndex`` of the period to predict.
+            The horizon length is derived from it, so it need not be known at
+            fit time. Forecast steps are drawn consecutively and labeled with
             these coordinates. The covariate-free half of the predict-time
             horizon capability; ``future_covariates`` is the with-covariates
             half.
-        future_covariates
-            Covariates covering only the forecast horizon, with a time index
+        future_covariates : xarray.DataArray, pandas.DataFrame or array_like, optional
+            Covariates (any input :func:`~pymc_forecast.data.as_dataarray`
+            accepts, including a ``pandas.Series``) covering only the forecast
+            horizon, with a time index
             lying after the training window; the forecast is conditioned on
             them — the with-covariates half of the predict-time horizon
             capability (``future_index`` is the covariate-free half).
             Structure (dims, covariate names and order) must match the
             training covariates. The horizon length is derived from it, so it
             need not be known at fit time.
-        posterior
-            A fixed posterior to condition on, in any shape
-            :func:`~pymc_forecast.prediction.posterior_dataset` accepts
-            (typically from :meth:`draw_posterior`). Passing the same
-            posterior to :meth:`predict_in_sample` and :meth:`forecast` makes
-            the calls draw-coherent: draw *i* in both results comes from the
-            same parameter draw. Without it, each call draws
-            ``num_samples`` fresh subsamples.
-        var_names, batch_size, random_seed, progressbar
-            Passed through to :func:`pymc_forecast.prediction.forecast`
-            (``batch_size`` bounds the working memory of predictive sampling
-            on very wide panels by processing the posterior in draw blocks).
+        posterior : xarray.Dataset, xarray.DataTree or arviz.InferenceData, optional
+            A fixed posterior to condition on: a posterior Dataset or any
+            object with a ``posterior`` group
+            (:func:`~pymc_forecast.prediction.posterior_dataset`), typically
+            from ``draw_posterior``; used as given, not thinned. Passing the
+            same posterior to ``predict_in_sample`` and ``forecast`` makes the
+            calls draw-coherent: draw *i* in both results comes from the same
+            parameter draw. Without it, each call draws ``num_samples`` fresh
+            subsamples. Mutually exclusive with ``num_samples``.
+        var_names : sequence of str, optional
+            Variables to record (a bare string is not accepted as a single
+            name); ``None`` uses the defaults of
+            :func:`pymc_forecast.prediction.forecast`.
+        batch_size : int, optional
+            Maximum posterior draws (per chain) per predictive pass, bounding
+            the working memory on very wide panels; ``None`` runs a single
+            pass. See :func:`pymc_forecast.prediction.forecast`.
+        random_seed : int or numpy.random.Generator, optional
+            Seeds both the posterior draws (when ``posterior`` is not given)
+            and the predictive sampling.
+        progressbar : bool, default False
+            Show the predictive sampling progress bar.
 
         Returns
         -------
-        DataTree
-            With a ``predictions`` group carrying ``time_future`` coords.
+        xarray.DataTree or arviz.InferenceData
+            Result of ``pm.sample_posterior_predictive`` (a DataTree with
+            current PyMC/ArviZ, InferenceData with older releases), with a
+            ``predictions`` group carrying ``time_future`` coords.
+
+        Raises
+        ------
+        pymc_forecast.exceptions.NotFittedError
+            If the forecaster has not been fitted.
+        ValueError
+            If not exactly one of ``covariates``, ``horizon``, ``future_index``
+            and ``future_covariates`` is given; if both ``posterior`` and
+            ``num_samples`` are given; if ``batch_size`` is not positive; or
+            (HMC/Pathfinder) if ``num_samples`` is not positive.
+        pymc_forecast.exceptions.AlignmentError
+            If ``horizon`` or ``future_index`` is given for a model fit with
+            covariates; if ``horizon`` is negative, not an integer, or the
+            time spacing cannot be inferred; if ``future_index`` is empty, not
+            strictly increasing, or does not start after the training window;
+            if the covariate structure does not match the training covariates;
+            or if the covariates cannot be normalized or do not align with the
+            training data.
+        pymc_forecast.exceptions.HorizonError
+            If the resulting horizon is empty (e.g. ``horizon=0``).
+        TypeError
+            If ``posterior`` has no ``posterior`` group.
         """
         self._require_fitted()
         provided = sum(
@@ -318,20 +432,50 @@ class BaseForecaster(abc.ABC):
     ):
         """Sample the in-sample posterior predictive and registered predictors.
 
-        The result contains ``"obs"`` and ``"mu"`` plus
-        ``"expected_observation"`` when the model supplies it to
-        :func:`~pymc_forecast.model.predict`.
+        The result contains ``"obs"``, plus ``"mu"`` and
+        ``"expected_observation"`` when the model registers them (models
+        built with :func:`~pymc_forecast.model.predict` register ``"mu"``;
+        ``"expected_observation"`` only when supplied to it).
 
         Parameters
         ----------
-        num_samples
-            Number of posterior draws; default 100. Mutually exclusive with
-            ``posterior``.
-        posterior
-            A fixed posterior to condition on (see :meth:`forecast` for the
-            draw-coherence semantics).
-        batch_size, random_seed, progressbar
-            Passed through to :func:`pymc_forecast.prediction.predict_in_sample`.
+        num_samples : int, optional
+            Number of posterior draws to sample when ``posterior`` is not
+            given; ``None`` means 100. Mutually exclusive with ``posterior``.
+        posterior : xarray.Dataset, xarray.DataTree or arviz.InferenceData, optional
+            A fixed posterior to condition on: a posterior Dataset or any
+            object with a ``posterior`` group
+            (:func:`~pymc_forecast.prediction.posterior_dataset`); used as
+            given, not thinned (see ``forecast`` for the draw-coherence
+            semantics). Mutually exclusive with ``num_samples``.
+        batch_size : int, optional
+            Maximum posterior draws (per chain) per predictive pass; ``None``
+            runs a single pass. See
+            :func:`pymc_forecast.prediction.predict_in_sample`.
+        random_seed : int or numpy.random.Generator, optional
+            Seeds both the posterior draws (when ``posterior`` is not given)
+            and the predictive sampling.
+        progressbar : bool, default False
+            Show the predictive sampling progress bar.
+
+        Returns
+        -------
+        xarray.DataTree or arviz.InferenceData
+            Result of ``pm.sample_posterior_predictive`` (a DataTree with
+            current PyMC/ArviZ, InferenceData with older releases), with a
+            ``posterior_predictive`` group holding the variables above over
+            ``"time"``.
+
+        Raises
+        ------
+        pymc_forecast.exceptions.NotFittedError
+            If the forecaster has not been fitted.
+        ValueError
+            If both ``posterior`` and ``num_samples`` are given, if
+            ``batch_size`` is not positive, or (HMC/Pathfinder) if
+            ``num_samples`` is not positive.
+        TypeError
+            If ``posterior`` has no ``posterior`` group.
         """
         self._require_fitted()
         posterior = self._resolve_posterior(posterior, num_samples, random_seed)
@@ -350,44 +494,93 @@ class Forecaster(BaseForecaster):
     """Fit a forecasting model with variational inference (ADVI by default).
 
     Mean-field ADVI can underconverge silently — the posterior looks fine but
-    is biased and overconfident. A post-fit heuristic warns when the ELBO is
-    still descending (see :func:`~pymc_forecast.fit._check_vi_convergence`); absence of the
-    warning is *not* proof of convergence, so check :attr:`losses` has
+    is biased and overconfident. A post-fit heuristic warns when the median
+    ELBO loss over the final 10% of steps (at least 10) is still clearly
+    below the median over a same-sized window starting mid-run; absence of
+    the warning is *not* proof of convergence, so check :attr:`losses` has
     plateaued before trusting results, and prefer :class:`HMCForecaster` when
     accuracy matters more than speed.
 
     Parameters
     ----------
-    model_fn, data, covariates, random_seed
-        See :class:`BaseForecaster`.
-    method
-        VI method: ``"advi"`` (mean-field, default) or ``"fullrank_advi"``, or
-        any ``pm.fit``-compatible inference object.
-    optimizer
+    model_fn : callable or pymc_forecast.model.ForecastingModel
+        The model body (see ``BaseForecaster``).
+    data : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like, optional
+        Observed training series, normalized with
+        :func:`~pymc_forecast.data.as_dataarray`. ``None`` constructs the
+        forecaster unfitted; call ``fit`` later.
+    covariates : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like, optional
+        Covariates on the same ``"time"`` coordinate as ``data``; rows past the
+        training window are dropped during fitting. ``None`` for models
+        without covariates.
+    method : str or pymc.variational.Inference, default "advi"
+        VI method: ``"advi"`` (mean-field), ``"fullrank_advi"``, ``"svgd"`` or
+        ``"asvgd"`` (case-insensitive, forwarded to ``pm.fit``), or a
+        ``pymc.variational.Inference`` instance — which fits the model it was
+        built on and ignores this forecaster's model and ``random_seed``. The
+        JAX backend accepts only ``"advi"``.
+    optimizer : float or callable, optional
         ``None`` (Adam with lr ``0.01``), a positive learning rate, or a PyMC
         optimizer such as ``pm.adam(learning_rate=...)``. The JAX backend
         accepts ``None`` or a positive learning rate.
-    backend
+    backend : {"pytensor", "jax"}, optional
         ``None`` or ``"pytensor"`` uses ``pm.fit``. ``"jax"`` runs mean-field
         ADVI and Adam as one JAX ``lax.scan`` on the selected accelerator
         (GPU when a CUDA JAX is installed), while retaining PyMC's ordinary
         approximation object for posterior sampling. The optional ``jax``
         extra is required.
-    num_steps
+    num_steps : int, default 10_000
         Number of optimization steps.
-    progressbar
-        Show the fit progress bar.
-    fit_kwargs
+    random_seed : int, optional
+        Seed for the fit; also the default seed for later ``fit`` calls.
+    progressbar : bool, optional
+        Show the fit progress bar; ``None`` means off. Ignored by the JAX
+        backend. May instead be given in ``fit_kwargs``, but not both.
+    fit_kwargs : mapping, optional
         Extra keyword arguments for ``pm.fit``. ``progressbar`` is accepted
         here for compatibility, but the direct argument is preferred (passing
-        both raises).
+        both raises). Must be empty with ``backend="jax"``.
 
     Attributes
     ----------
-    approx
-        The fitted ``pm.Approximation``.
-    losses
-        The ELBO loss history (one value per step).
+    model_fn : callable or pymc_forecast.model.ForecastingModel
+        The model body passed to the constructor.
+    model : pymc.Model or None
+        The training model; ``None`` before the first fit.
+    approx : pymc.variational.Approximation
+        The fitted approximation (set by fitting).
+    losses : numpy.ndarray
+        The per-step loss history (``approx.hist``); empty for ``"svgd"`` and
+        ``"asvgd"``, which record no loss (set by fitting).
+    idata : None
+        Always ``None`` for variational fits (set by fitting).
+
+    Raises
+    ------
+    pymc_forecast.exceptions.MethodResolutionError
+        If, on construction, ``backend`` is unknown, ``optimizer`` is not a
+        positive learning rate or (pytensor backend) a callable, or, with
+        ``backend="jax"``, ``method`` is not ``"advi"`` or ``fit_kwargs`` is
+        non-empty; or if, when fitting, ``method`` is an unknown name.
+    ValueError
+        If ``progressbar`` is given both directly and in ``fit_kwargs``, if
+        ``covariates`` is given without ``data``, or (JAX backend) if
+        ``num_steps`` is not positive.
+    pymc_forecast.exceptions.AlignmentError
+        If (when fitting) ``data`` or ``covariates`` cannot be normalized or do
+        not align along ``"time"``.
+    pymc_forecast.exceptions.HorizonError
+        If (when fitting) the model body does not register ``"obs"`` or
+        misuses the model primitives.
+    pymc_forecast.exceptions.OptionalDependencyError
+        If ``backend="jax"`` and JAX is not installed (when fitting).
+
+    Warns
+    -----
+    UserWarning
+        When the post-fit heuristic finds the ELBO still descending, or the
+        loss history contains non-finite values so convergence cannot be
+        assessed.
     """
 
     _batch_generated_posterior = True
@@ -442,24 +635,61 @@ class HMCForecaster(BaseForecaster):
 
     Parameters
     ----------
-    model_fn, data, covariates, random_seed
-        See :class:`BaseForecaster`.
-    draws, tune, chains
-        MCMC schedule (defaults ``1000`` / ``1000`` / ``2``).
-    nuts_sampler
-        NUTS backend: ``"pymc"`` (default), ``"nutpie"``, ``"numpyro"``, or
-        ``"blackjax"``.
-    progressbar
-        Show the sampling progress bar.
-    sample_kwargs
+    model_fn : callable or pymc_forecast.model.ForecastingModel
+        The model body (see ``BaseForecaster``).
+    data : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like, optional
+        Observed training series, normalized with
+        :func:`~pymc_forecast.data.as_dataarray`. ``None`` constructs the
+        forecaster unfitted; call ``fit`` later.
+    covariates : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like, optional
+        Covariates on the same ``"time"`` coordinate as ``data``; rows past the
+        training window are dropped during fitting. ``None`` for models
+        without covariates.
+    draws : int, default 1000
+        Number of posterior draws per chain.
+    tune : int, default 1000
+        Number of tuning steps per chain.
+    chains : int, default 2
+        Number of chains.
+    nuts_sampler : {"pymc", "nutpie", "numpyro", "blackjax"}, default "pymc"
+        NUTS backend, forwarded to ``pm.sample``; non-PyMC samplers need
+        their optional package installed.
+    random_seed : int or numpy.random.Generator, optional
+        Seed for the fit, forwarded to ``pm.sample``; also the default seed
+        for later ``fit`` calls.
+    progressbar : bool, optional
+        Show the sampling progress bar; ``None`` means off. May instead be
+        given in ``sample_kwargs``, but not both.
+    sample_kwargs : mapping, optional
         Extra keyword arguments for ``pm.sample``. ``progressbar`` is
         accepted here for compatibility, but the direct argument is preferred
         (passing both raises).
 
     Attributes
     ----------
-    idata
-        The full MCMC result (posterior, sample stats, ...).
+    model_fn : callable or pymc_forecast.model.ForecastingModel
+        The model body passed to the constructor.
+    model : pymc.Model or None
+        The training model; ``None`` before the first fit.
+    idata : xarray.DataTree or arviz.InferenceData
+        The full MCMC result (posterior, sample stats, ...), as returned by
+        ``pm.sample`` (set by fitting).
+    approx : None
+        Always ``None`` for MCMC fits (set by fitting).
+    losses : None
+        Always ``None`` for MCMC fits (set by fitting).
+
+    Raises
+    ------
+    ValueError
+        If ``progressbar`` is given both directly and in ``sample_kwargs``, or
+        ``covariates`` is given without ``data``.
+    pymc_forecast.exceptions.AlignmentError
+        If (when fitting) ``data`` or ``covariates`` cannot be normalized or do
+        not align along ``"time"``.
+    pymc_forecast.exceptions.HorizonError
+        If (when fitting) the model body does not register ``"obs"`` or
+        misuses the model primitives.
     """
 
     def __init__(
@@ -509,15 +739,27 @@ class PathfinderForecaster(BaseForecaster):
     """Fit a forecasting model with Pathfinder variational inference.
 
     A thin wrapper over ``pymc_extras.fit_pathfinder``. pymc-extras is imported
-    lazily, so constructing this class is the opt-in that requires it.
+    only when fitting, so constructing without data does not require it.
 
     Parameters
     ----------
-    model_fn, data, covariates, random_seed
-        See :class:`BaseForecaster`.
-    progressbar
-        Show the fit progress bar.
-    pathfinder_kwargs
+    model_fn : callable or pymc_forecast.model.ForecastingModel
+        The model body (see ``BaseForecaster``).
+    data : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like, optional
+        Observed training series, normalized with
+        :func:`~pymc_forecast.data.as_dataarray`. ``None`` constructs the
+        forecaster unfitted; call ``fit`` later.
+    covariates : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like, optional
+        Covariates on the same ``"time"`` coordinate as ``data``; rows past the
+        training window are dropped during fitting. ``None`` for models
+        without covariates.
+    random_seed : int, optional
+        Seed for the fit, forwarded to ``pymc_extras.fit_pathfinder``; also the
+        default seed for later ``fit`` calls.
+    progressbar : bool, optional
+        Show the fit progress bar; ``None`` means off. May instead be given in
+        ``pathfinder_kwargs``, but not both.
+    pathfinder_kwargs : mapping, optional
         Extra keyword arguments for ``pymc_extras.fit_pathfinder``
         (e.g. ``num_paths``, ``num_draws``). ``progressbar`` is accepted here
         for compatibility, but the direct argument is preferred (passing both
@@ -525,8 +767,30 @@ class PathfinderForecaster(BaseForecaster):
 
     Attributes
     ----------
-    idata
-        The Pathfinder result with its ``posterior`` group.
+    model_fn : callable or pymc_forecast.model.ForecastingModel
+        The model body passed to the constructor.
+    model : pymc.Model or None
+        The training model; ``None`` before the first fit.
+    idata : xarray.DataTree or arviz.InferenceData
+        The Pathfinder result with its ``posterior`` group (set by fitting).
+    approx : None
+        Always ``None`` for Pathfinder fits (set by fitting).
+    losses : None
+        Always ``None`` for Pathfinder fits (set by fitting).
+
+    Raises
+    ------
+    ValueError
+        If ``progressbar`` is given both directly and in
+        ``pathfinder_kwargs``, or ``covariates`` is given without ``data``.
+    pymc_forecast.exceptions.AlignmentError
+        If (when fitting) ``data`` or ``covariates`` cannot be normalized or do
+        not align along ``"time"``.
+    pymc_forecast.exceptions.HorizonError
+        If (when fitting) the model body does not register ``"obs"`` or
+        misuses the model primitives.
+    pymc_forecast.exceptions.OptionalDependencyError
+        If pymc-extras is not installed (when fitting).
     """
 
     def __init__(

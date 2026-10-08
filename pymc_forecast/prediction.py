@@ -3,9 +3,9 @@
 Both drivers rebuild the model via :func:`~pymc_forecast.model.build_model`
 (forecasting with extended covariates, in-sample with the observed window) and
 run ``pm.sample_posterior_predictive`` over a posterior. Posteriors are
-accepted in any of the shapes the fitting paths produce — an ArviZ
-``DataTree``/``InferenceData`` with a ``posterior`` group, or a bare posterior
-``Dataset``.
+accepted in any of the shapes the fitting paths produce — an
+``xarray.DataTree`` or ``arviz.InferenceData`` with a ``posterior`` group, or
+a bare posterior ``Dataset``.
 
 Prediction outputs are draw-level by contract: every variable in the
 ``predictions`` (out-of-sample) and ``posterior_predictive`` (in-sample)
@@ -48,14 +48,25 @@ PREDICTIVE_GROUPS = ("predictions", "posterior_predictive")
 def prediction_samples(result) -> xr.Dataset:
     """Extract the draw-level predictive samples from a prediction result.
 
-    Accepts any result shape the predictive drivers produce — an ArviZ
-    ``DataTree`` / ``InferenceData`` with a ``predictions`` group (from
-    :func:`forecast`) or a ``posterior_predictive`` group (from
+    Accepts any result shape the predictive drivers produce — an
+    ``xarray.DataTree`` / ``arviz.InferenceData`` with a ``predictions`` group
+    (from :func:`forecast`) or a ``posterior_predictive`` group (from
     :func:`predict_in_sample`) — or a bare ``Dataset`` (returned unchanged),
     and returns the samples as an ``xarray.Dataset`` whose variables retain
     the full ``chain`` / ``draw`` dims. Point summaries are the caller's
     choice, e.g. ``prediction_samples(result)["forecast"].mean(("chain",
     "draw"))``.
+
+    Parameters
+    ----------
+    result : xarray.Dataset, xarray.DataTree or arviz.InferenceData
+        A prediction result; ``predictions`` is looked up before
+        ``posterior_predictive``.
+
+    Returns
+    -------
+    xarray.Dataset
+        The draw-level predictive samples.
 
     Raises
     ------
@@ -81,8 +92,24 @@ def prediction_samples(result) -> xr.Dataset:
 def posterior_dataset(posterior) -> xr.Dataset:
     """Extract the posterior group as a plain ``xarray.Dataset``.
 
-    Accepts an ArviZ ``DataTree`` / ``InferenceData`` (uses its ``posterior``
-    group) or a bare ``Dataset`` (returned unchanged).
+    Accepts an ``xarray.DataTree`` / ``arviz.InferenceData`` (or any object
+    with a ``posterior`` item or attribute; uses its ``posterior`` group) or a
+    bare ``Dataset`` (returned unchanged).
+
+    Parameters
+    ----------
+    posterior : xarray.Dataset, xarray.DataTree or arviz.InferenceData
+        The posterior container.
+
+    Returns
+    -------
+    xarray.Dataset
+        The posterior samples.
+
+    Raises
+    ------
+    TypeError
+        If ``posterior`` is not a Dataset and has no ``posterior`` group.
     """
     if isinstance(posterior, xr.Dataset):
         return posterior
@@ -103,6 +130,29 @@ def thin_draws(posterior, num_samples: int, random_seed=None) -> xr.Dataset:
     ``(chain, draw)`` axes (with replacement only if more draws are requested
     than exist). The result is a posterior ``Dataset`` with ``chain=1``,
     directly consumable by ``pm.sample_posterior_predictive``.
+
+    Parameters
+    ----------
+    posterior : xarray.Dataset, xarray.DataTree or arviz.InferenceData
+        A posterior Dataset or any object with a ``posterior`` group (see
+        :func:`posterior_dataset`), with ``chain`` and ``draw`` dims.
+    num_samples : int
+        Number of draws to keep; must be positive.
+    random_seed : int or numpy.random.Generator, optional
+        Seed for the draw selection (passed to ``numpy.random.default_rng``).
+
+    Returns
+    -------
+    xarray.Dataset
+        Posterior with dims ``(chain, draw, ...)``, ``chain`` coord ``[0]``
+        and ``draw`` coord ``0 .. num_samples - 1``.
+
+    Raises
+    ------
+    ValueError
+        If ``num_samples`` is not positive.
+    TypeError
+        If ``posterior`` has no ``posterior`` group.
     """
     if num_samples <= 0:
         msg = f"num_samples must be positive, got {num_samples}"
@@ -255,25 +305,34 @@ def forecast(
 
     Parameters
     ----------
-    model_fn
+    model_fn : callable or pymc_forecast.model.ForecastingModel
         The model body (``(covariates, data=None) -> None`` or a
         :class:`~pymc_forecast.model.ForecastingModel`).
-    posterior
-        A fitted posterior (``DataTree``/``InferenceData`` or ``Dataset``).
-    data
-        Observed data over the training window.
-    covariates
-        Covariates spanning training window plus forecast horizon.
-    num_samples
-        If given, subsample the posterior to this many draws first.
-    var_names
-        Variables to record. Default: ``"forecast"``, all ``*_future``
-        latents, and — for models registered through
-        :func:`~pymc_forecast.model.predict` — the noise-free ``"mu_future"``
-        predictor plus ``"expected_observation_future"`` when supplied by the
-        model. On very wide panels, restricting this to ``["forecast"]`` also
-        shrinks the result's memory footprint.
-    batch_size
+    posterior : xarray.Dataset, xarray.DataTree or arviz.InferenceData
+        A posterior Dataset or any object with a ``posterior`` group
+        (:func:`posterior_dataset`); thinned only if ``num_samples`` is given.
+    data : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like
+        Observed series over the training window, normalized with
+        :func:`~pymc_forecast.data.as_dataarray` (``"time"`` first; 2-D input
+        gets a ``"series"`` dim).
+    covariates : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like
+        Covariates on the same ``"time"`` coordinate as ``data``, spanning the
+        training window plus the forecast horizon (normalized with
+        ``as_dataarray``; 2-D input gets a ``"covariate"`` dim); the steps past
+        ``data`` define the horizon. Required: for covariate-free models pass
+        :func:`~pymc_forecast.data.null_covariates` over the full time index.
+    num_samples : int, optional
+        Thin ``posterior`` to this many draws first (see :func:`thin_draws`);
+        ``None`` uses every draw.
+    var_names : sequence of str, optional
+        Variables to record (a bare string is not accepted as a single name).
+        Default: ``"forecast"``, all ``*_future`` latents, and — for models
+        registered through :func:`~pymc_forecast.model.predict` — the
+        noise-free ``"mu_future"`` predictor plus
+        ``"expected_observation_future"`` when supplied by the model. On very
+        wide panels, restricting this to ``["forecast"]`` also shrinks the
+        result's memory footprint.
+    batch_size : int, optional
         Maximum posterior draws (per chain) per predictive pass. When set,
         the posterior is processed in consecutive blocks of at most this many
         draws and the blocks are concatenated along ``draw`` — bounding the
@@ -281,16 +340,31 @@ def forecast(
         upstream's chunked prediction, juanitorduz/numpyro_forecast#65).
         Per-block seeds are derived from ``random_seed``, so a batched run is
         deterministic given the seed but draws different (equally valid)
-        noise than an unbatched run.
-    random_seed
+        noise than an unbatched run. ``None`` runs a single pass.
+    random_seed : int or numpy.random.Generator, optional
         Seed for thinning and predictive sampling.
-    progressbar
+    progressbar : bool, default False
         Show the sampling progress bar.
 
     Returns
     -------
-    DataTree
-        With a ``predictions`` group carrying ``time_future`` coords.
+    xarray.DataTree or arviz.InferenceData
+        Result of ``pm.sample_posterior_predictive`` (a DataTree with current
+        PyMC/ArviZ, InferenceData with older releases), with a
+        ``predictions`` group carrying ``time_future`` coords.
+
+    Raises
+    ------
+    pymc_forecast.exceptions.HorizonError
+        If ``covariates`` has the same length as ``data`` along ``"time"`` (no
+        forecast horizon; shorter covariates raise ``AlignmentError``), or the
+        model body does not register ``"obs"``.
+    pymc_forecast.exceptions.AlignmentError
+        If ``data`` or ``covariates`` cannot be normalized or do not align.
+    ValueError
+        If ``num_samples`` or ``batch_size`` is not positive.
+    TypeError
+        If ``posterior`` has no ``posterior`` group.
     """
     model = build_model(model_fn, data, covariates)
     if FORECAST_VAR not in model.named_vars:
@@ -323,7 +397,7 @@ def predict_in_sample(
     random_seed=None,
     progressbar: bool = False,
 ):
-    """Sample the in-sample posterior predictive of the ``"obs"`` variable.
+    """Sample the in-sample posterior predictive of ``"obs"`` and registered predictors.
 
     The in-sample counterpart of :func:`forecast`: the model is rebuilt over
     the observed window only (no forecast horizon) and the observed variable
@@ -334,18 +408,50 @@ def predict_in_sample(
 
     Parameters
     ----------
-    model_fn, posterior, data
-        As in :func:`forecast`.
-    covariates
-        Covariates covering (at least) the observed window; surplus future
-        steps are dropped. ``None`` for models without covariates.
-    num_samples, batch_size, random_seed, progressbar
-        As in :func:`forecast`.
+    model_fn : callable or pymc_forecast.model.ForecastingModel
+        The model body (``(covariates, data=None) -> None`` or a
+        :class:`~pymc_forecast.model.ForecastingModel`).
+    posterior : xarray.Dataset, xarray.DataTree or arviz.InferenceData
+        A posterior Dataset or any object with a ``posterior`` group
+        (:func:`posterior_dataset`); thinned only if ``num_samples`` is given.
+    data : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like
+        Observed series, normalized with
+        :func:`~pymc_forecast.data.as_dataarray` (``"time"`` first; 2-D input
+        gets a ``"series"`` dim).
+    covariates : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like, optional
+        Covariates on the same ``"time"`` coordinate as ``data``, covering (at
+        least) the observed window (normalized with ``as_dataarray``; 2-D
+        input gets a ``"covariate"`` dim); rows past ``data`` are dropped.
+        ``None`` for models without covariates.
+    num_samples : int, optional
+        Thin ``posterior`` to this many draws first (see :func:`thin_draws`);
+        ``None`` uses every draw.
+    batch_size : int, optional
+        Maximum posterior draws (per chain) per predictive pass; ``None`` runs
+        a single pass (see :func:`forecast`).
+    random_seed : int or numpy.random.Generator, optional
+        Seed for thinning and predictive sampling.
+    progressbar : bool, default False
+        Show the sampling progress bar.
 
     Returns
     -------
-    DataTree
-        With a ``posterior_predictive`` group holding ``"obs"``.
+    xarray.DataTree or arviz.InferenceData
+        Result of ``pm.sample_posterior_predictive`` (a DataTree with current
+        PyMC/ArviZ, InferenceData with older releases), with a
+        ``posterior_predictive`` group holding ``"obs"``, plus ``"mu"`` and
+        ``"expected_observation"`` when the model registers them.
+
+    Raises
+    ------
+    pymc_forecast.exceptions.AlignmentError
+        If ``data`` or ``covariates`` cannot be normalized or do not align.
+    pymc_forecast.exceptions.HorizonError
+        If the model body does not register ``"obs"``.
+    ValueError
+        If ``num_samples`` or ``batch_size`` is not positive.
+    TypeError
+        If ``posterior`` has no ``posterior`` group.
     """
     data_da = as_dataarray(data, role="data")
     if covariates is None:

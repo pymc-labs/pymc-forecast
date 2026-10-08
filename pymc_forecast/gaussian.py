@@ -23,6 +23,7 @@ from pymc_forecast.model import FORECAST_VAR, OBS_VAR, Horizon
 __all__ = ["conditional_mvn", "predict_mvn"]
 
 DEFAULT_JITTER = 1e-6
+"""Default additive diagonal jitter of :func:`conditional_mvn` and :func:`predict_mvn`."""
 
 
 def _symmetrize(cov):
@@ -44,19 +45,24 @@ def conditional_mvn(loc, cov, observed_prefix, *, jitter: float = DEFAULT_JITTER
 
     Parameters
     ----------
-    loc
-        Full-horizon mean, shape ``(t + f,)``.
-    cov
-        Full-horizon covariance, shape ``(t + f, t + f)``.
-    observed_prefix
+    loc : numpy.ndarray or pytensor.tensor.TensorVariable
+        Full-horizon mean, shape ``(t + f,)``; must be a tensor when
+        ``observed_prefix`` is a tensor.
+    cov : numpy.ndarray or pytensor.tensor.TensorVariable
+        Full-horizon covariance, shape ``(t + f, t + f)``; it is symmetrized
+        before use.
+    observed_prefix : numpy.ndarray or pytensor.tensor.TensorVariable
         Observed values, shape ``(t,)``.
-    jitter
-        Diagonal floor added to the prefix and conditional covariances.
+    jitter : float, default 1e-6
+        Additive diagonal term, added to the symmetrized joint covariance and
+        again to the conditional covariance.
 
     Returns
     -------
-    (cond_mean, cond_cov)
-        Mean ``(f,)`` and covariance ``(f, f)`` of the forecast conditional.
+    cond_mean : pytensor.tensor.TensorVariable
+        Mean of the forecast conditional, shape ``(f,)``.
+    cond_cov : pytensor.tensor.TensorVariable
+        Covariance of the forecast conditional, shape ``(f, f)``.
     """
     t = observed_prefix.shape[0]
     cov = _jittered(cov, jitter)
@@ -80,22 +86,28 @@ def predict_mvn(h: Horizon, loc, cov, *, jitter: float = DEFAULT_JITTER) -> None
     exact Gaussian conditional given the observed prefix, not the horizon
     marginal.
 
+    Only ``"obs"`` and (when forecasting) ``"forecast"`` are registered; unlike
+    :func:`~pymc_forecast.model.predict`, no ``"mu"`` / ``"mu_future"``
+    Deterministics are recorded.
+
     Parameters
     ----------
-    h
-        The horizon of the current model build.
-    loc
+    h : pymc_forecast.model.Horizon
+        The horizon of the current model build; its data, if any, must be 1-D.
+    loc : array_like or pytensor.tensor.TensorVariable
         Full-horizon mean with shape ``(duration,)`` (time on axis 0).
-    cov
+    cov : array_like or pytensor.tensor.TensorVariable
         Full-horizon covariance with shape ``(duration, duration)`` — e.g. a
         GP kernel gram matrix over the time positions.
-    jitter
-        Diagonal floor for numerical stability.
+    jitter : float, default 1e-6
+        Additive diagonal term for numerical stability, added to the
+        symmetrized covariance and again to the conditional forecast
+        covariance (see :func:`conditional_mvn`).
 
     Raises
     ------
-    HorizonError
-        For multivariate data (the MVN event dim must be time) or when
+    pymc_forecast.exceptions.HorizonError
+        If the data are multivariate (the MVN event dim must be time), or if
         forecasting without observed data.
     """
     loc = pt.as_tensor_variable(loc)

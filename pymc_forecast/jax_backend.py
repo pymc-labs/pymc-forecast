@@ -20,12 +20,39 @@ def fit_advi_jax(model, *, num_steps: int, learning_rate: float, random_seed=Non
     Returns the ordinary PyMC ``MeanField`` approximation, so posterior draws
     and every downstream Forecaster operation remain backend-independent.
 
-    .. note::
-       This sets JAX's process-wide ``jax_enable_x64`` flag to match
-       PyTensor's ``floatX`` (enabling it for ``float64``, disabling it
-       otherwise) so JAX does not silently truncate PyMC's initial point.
-       The flag is global, so it also affects any other JAX code in the
-       same process.
+    Parameters
+    ----------
+    model : pymc.Model
+        The training-window model to fit.
+    num_steps : int
+        Number of Adam steps; must be positive.
+    learning_rate : float
+        Adam learning rate (not validated here).
+    random_seed : int, optional
+        Seed for ``pm.ADVI`` and the JAX random key; ``None`` gives a
+        non-deterministic fit.
+
+    Returns
+    -------
+    pymc.variational.approximations.MeanField
+        The fitted approximation; ``approx.hist`` holds the per-step loss
+        (single-sample negative ELBO) as a 1-d ``numpy.ndarray`` of length
+        ``num_steps``.
+
+    Raises
+    ------
+    pymc_forecast.exceptions.OptionalDependencyError
+        If JAX is not installed.
+    ValueError
+        If ``num_steps`` is not positive.
+
+    Notes
+    -----
+    This sets JAX's process-wide ``jax_enable_x64`` flag to match
+    PyTensor's ``floatX`` (enabling it for ``float64``, disabling it
+    otherwise) so JAX does not silently truncate PyMC's initial point.
+    The flag is global, so it also affects any other JAX code in the
+    same process.
     """
     try:
         import jax

@@ -5,8 +5,8 @@ training slice and asked to forecast the test slice, and metrics are computed
 on the sampled predictions. Two windowing strategies are supported —
 ``"expanding"`` (train from the start of history) and ``"rolling"`` (fixed
 training length) — with window bookkeeping ported from numpyro_forecast /
-Pyro. Windows are coordinate slices: results carry integer split points and
-the predictions keep their real time coords.
+Pyro. Windows are positional (integer) slices along ``"time"``: results carry
+integer split points and the predictions keep their real time coords.
 """
 
 from collections.abc import Callable, Iterator, Mapping
@@ -26,28 +26,39 @@ from pymc_forecast.metrics import DEFAULT_METRICS, Metric, evaluate_forecast
 __all__ = ["BacktestResult", "WindowType", "backtest", "results_to_dataframe"]
 
 WindowType = Literal["expanding", "rolling"]
+"""Allowed ``window_type`` values of :func:`backtest`, ``"expanding"`` or ``"rolling"``."""
 
 
 @dataclass(frozen=True)
 class BacktestResult:
     """Per-window result of a :func:`backtest` run.
 
-    Attributes
+    Each parameter is available as an attribute of the same name.
+
+    Parameters
     ----------
-    t0, t1, t2
-        Train-begin, train/test split, and test-end positions (integer offsets
-        into the data's ``"time"`` dim).
-    num_samples
-        Number of forecast samples drawn.
-    train_walltime, test_walltime
-        Wall-clock seconds for fitting and forecasting.
-    metrics
-        Metric name → value on the test window.
-    train_metrics
-        Metric name → in-sample value (empty unless ``eval_train=True``).
-    prediction
-        Forecast samples for the window (``None`` unless
-        ``keep_predictions=True``).
+    t0 : int
+        Inclusive start of the training slice (positional index into the
+        data's ``"time"`` dim); ``0`` for expanding windows.
+    t1 : int
+        Train/test split: exclusive end of training and inclusive start of
+        the test slice.
+    t2 : int
+        Exclusive end of the test slice.
+    num_samples : int
+        Requested number of forecast samples (the ``backtest`` argument).
+    train_walltime : float
+        Wall-clock seconds to construct (build and fit) the forecaster.
+    test_walltime : float
+        Wall-clock seconds for the forecast call.
+    metrics : dict
+        Metric name → value (``float``) on the test window.
+    train_metrics : dict, optional
+        Metric name → in-sample value (``float``); empty unless
+        ``eval_train=True``. Defaults to an empty dict.
+    prediction : xarray.DataArray, optional
+        Forecast samples for the window, after ``transform`` if one was given
+        (``None`` unless ``keep_predictions=True``).
     """
 
     t0: int
@@ -154,48 +165,88 @@ def backtest(
 
     Parameters
     ----------
-    data
-        The full series (any input :func:`~pymc_forecast.data.as_dataarray`
-        accepts).
-    covariates
-        Covariates over the same span as ``data`` (``None`` for models without
-        covariates).
-    model_fn
+    data : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like
+        The full series, normalized with
+        :func:`~pymc_forecast.data.as_dataarray` (``"time"`` first; 2-D input
+        gets a ``"series"`` dim).
+    covariates : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like or None
+        Covariates over the same span as ``data`` (normalized with
+        ``as_dataarray``; 2-D input gets a ``"covariate"`` dim), sliced by
+        position alongside ``data``. ``None`` for models without covariates.
+    model_fn : callable or pymc_forecast.model.ForecastingModel
         The model body or :class:`~pymc_forecast.model.ForecastingModel`.
-    forecaster_cls
-        Forecaster class constructed per window (default
-        :class:`~pymc_forecast.forecaster.Forecaster`).
-    metrics
+    forecaster_cls : type, default pymc_forecast.forecaster.Forecaster
+        Forecaster class constructed per window as
+        ``forecaster_cls(model_fn, train_data, window_covariates,
+        random_seed=..., **options)``, where ``window_covariates`` are the
+        covariate rows ``t0:t2`` (training plus test span; zero-width
+        covariates when ``covariates`` is ``None``).
+    metrics : mapping, optional
         Metric name → function; defaults to
         :data:`~pymc_forecast.metrics.DEFAULT_METRICS`. Bind metric parameters
         with ``functools.partial``.
-    per_window_metrics
+    per_window_metrics : callable, optional
         Optional ``(t0, t1, t2) -> Mapping`` producing extra metrics per
         window (e.g. a MASE scaled by that window's training slice via
-        :func:`~pymc_forecast.metrics.make_mase`).
-    transform
+        :func:`~pymc_forecast.metrics.make_mase`); entries override
+        same-named ``metrics``.
+    transform : callable, optional
         Optional ``(pred, truth) -> (pred, truth)`` applied before metrics
         (both labeled: ``pred`` has ``chain``/``draw`` sample dims, ``truth``
-        is renamed to ``time_future`` so names align).
-    window_type, train_window, min_train_window, test_window, min_test_window, stride
-        Windowing controls; ``window_type=None`` infers ``"rolling"`` when
+        is renamed to ``time_future`` so names align). With ``eval_train``,
+        it is also applied to the in-sample ``obs`` samples and the training
+        slice, which both use the ``"time"`` dim.
+    window_type : {"expanding", "rolling"}, optional
+        ``"expanding"`` trains from the start of the series; ``"rolling"``
+        uses a fixed ``train_window``. ``None`` infers ``"rolling"`` when
         ``train_window`` is set and ``"expanding"`` otherwise.
-    num_samples
-        Forecast samples per window.
-    forecaster_options
+    train_window : int, optional
+        Fixed training length for rolling windows; required for
+        ``"rolling"`` and not allowed with ``"expanding"``.
+    min_train_window : int, default 1
+        Minimum training length; the first split for expanding windows.
+    test_window : int, optional
+        Maximum test length; ``None`` tests to the end of the series.
+    min_test_window : int, default 1
+        Minimum test length; splits stop once fewer than this many test steps
+        would remain, so every window has at least ``min_test_window`` test
+        steps.
+    stride : int, default 1
+        Step between successive splits.
+    num_samples : int, default 100
+        Forecast samples per window (also used for in-sample predictions).
+    forecaster_options : mapping or callable, optional
         Extra constructor kwargs for ``forecaster_cls`` — a mapping, or a
         callable ``(t0, t1, t2) -> mapping`` for per-window options.
-    eval_train
+    eval_train : bool, default False
         Also score the in-sample posterior predictive of each window.
-    keep_predictions
-        Keep each window's forecast samples on the result.
-    random_seed
-        Base seed; per-window fit/forecast seeds are derived deterministically.
+    keep_predictions : bool, default False
+        Keep each window's (transformed) forecast samples on the result.
+    random_seed : int or sequence of int, optional
+        Base seed (``numpy.random.SeedSequence`` entropy); per-window
+        fit/forecast seeds are derived deterministically.
 
     Returns
     -------
-    list[BacktestResult]
+    list of BacktestResult
         One result per window, in time order.
+
+    Raises
+    ------
+    pymc_forecast.exceptions.BacktestWindowError
+        If ``window_type`` is unknown or conflicts with ``train_window``, a
+        window parameter is not an integer (or is a bool), a minimum is below
+        1, ``test_window < min_test_window``, ``stride < 1``,
+        ``train_window < min_train_window``, or the series is too short for
+        any window.
+    pymc_forecast.exceptions.AlignmentError
+        If ``data`` or ``covariates`` cannot be normalized; errors raised by
+        ``forecaster_cls`` (fitting/forecasting) and by the metrics propagate.
+
+    Warns
+    -----
+    UserWarning
+        From the VI convergence check of the default ``forecaster_cls``.
     """
     data_da = as_dataarray(data, role="data")
     if covariates is None:
@@ -282,6 +333,18 @@ def results_to_dataframe(results: list[BacktestResult]):
 
     One row per window: split points, walltimes, one column per metric, and
     ``train_``-prefixed columns for in-sample metrics when present.
+
+    Parameters
+    ----------
+    results : list of BacktestResult
+        Results of :func:`backtest`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Columns ``t0``, ``t1``, ``t2``, ``num_samples``, ``train_walltime``,
+        ``test_walltime``, then one per metric and one ``train_<name>`` per
+        in-sample metric; ``prediction`` is not included.
     """
     import pandas as pd
 
