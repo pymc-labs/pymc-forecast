@@ -1,6 +1,9 @@
 """Probabilistic forecast metrics, dim-aware.
 
-Every metric takes forecast samples and ground truth and reduces to a float.
+Each ``eval_*`` metric takes forecast samples and ground truth and reduces them
+to a single float; :func:`crps_empirical` returns elementwise scores and
+:func:`make_mase` builds a metric from training data.
+
 Inputs may be labeled (``xarray.DataArray``) or raw numpy:
 
 - **DataArray predictions** carry their sample dimensions by name — ``chain`` /
@@ -102,16 +105,27 @@ def crps_empirical(pred, truth) -> np.ndarray:
 
     Parameters
     ----------
-    pred
-        Forecast samples (labeled, or numpy with the sample axis first). At
-        least 2 samples are required.
-    truth
-        Ground-truth values (prediction shape without the sample axis).
+    pred : xarray.DataArray or array_like
+        Forecast samples: a DataArray with sample dims named ``chain``, ``draw``
+        or ``sample``, or an array with the sample axis first. At least 2
+        samples are required.
+    truth : xarray.DataArray or array_like
+        Ground-truth values with the prediction's shape without the sample
+        axis. When ``pred`` is labeled, labeled truth is aligned by dim name
+        and coordinates; otherwise it is used positionally.
 
     Returns
     -------
     numpy.ndarray
-        Elementwise CRPS, one value per data location.
+        Elementwise CRPS as an unlabeled float64 array, one value per data
+        location (value dims in the prediction's dim order).
+
+    Raises
+    ------
+    ValueError
+        If there are fewer than 2 samples, a labeled ``pred`` has no sample
+        dim, or ``pred`` and ``truth`` disagree on dims, sizes, coordinates or
+        shape.
     """
     pred, truth = _as_sample_first(pred, truth)
     # Integer counts and low-precision forecasts must not overflow in pairwise
@@ -132,19 +146,87 @@ def crps_empirical(pred, truth) -> np.ndarray:
 
 
 def eval_mae(pred, truth) -> float:
-    """Mean absolute error of the forecast sample median."""
+    """Mean absolute error of the forecast sample median.
+
+    Parameters
+    ----------
+    pred : xarray.DataArray or array_like
+        Forecast samples: a DataArray with sample dims named ``chain``, ``draw``
+        or ``sample``, or an array with the sample axis first.
+    truth : xarray.DataArray or array_like
+        Ground-truth values with the prediction's shape without the sample
+        axis. When ``pred`` is labeled, labeled truth is aligned by dim name
+        and coordinates; otherwise it is used positionally.
+
+    Returns
+    -------
+    float
+        The absolute error averaged over every value element.
+
+    Raises
+    ------
+    ValueError
+        If ``pred`` has no samples, a labeled ``pred`` has no sample dim, or
+        ``pred`` and ``truth`` disagree on dims, sizes, coordinates or shape.
+    """
     pred, truth = _as_sample_first(pred, truth)
     return float(np.abs(np.median(pred, axis=0) - truth).mean())
 
 
 def eval_rmse(pred, truth) -> float:
-    """Root mean squared error of the forecast sample mean."""
+    """Root mean squared error of the forecast sample mean.
+
+    Parameters
+    ----------
+    pred : xarray.DataArray or array_like
+        Forecast samples: a DataArray with sample dims named ``chain``, ``draw``
+        or ``sample``, or an array with the sample axis first.
+    truth : xarray.DataArray or array_like
+        Ground-truth values with the prediction's shape without the sample
+        axis. When ``pred`` is labeled, labeled truth is aligned by dim name
+        and coordinates; otherwise it is used positionally.
+
+    Returns
+    -------
+    float
+        The root of the squared error averaged over every value element.
+
+    Raises
+    ------
+    ValueError
+        If ``pred`` has no samples, a labeled ``pred`` has no sample dim, or
+        ``pred`` and ``truth`` disagree on dims, sizes, coordinates or shape.
+    """
     pred, truth = _as_sample_first(pred, truth)
     return float(np.sqrt(np.square(pred.mean(axis=0) - truth).mean()))
 
 
 def eval_crps(pred, truth) -> float:
-    """Mean empirical CRPS over all data elements (see :func:`crps_empirical`)."""
+    """Mean empirical CRPS over all data elements (see :func:`crps_empirical`).
+
+    Parameters
+    ----------
+    pred : xarray.DataArray or array_like
+        Forecast samples: a DataArray with sample dims named ``chain``, ``draw``
+        or ``sample``, or an array with the sample axis first. At least 2
+        samples are required.
+    truth : xarray.DataArray or array_like
+        Ground-truth values with the prediction's shape without the sample
+        axis. When ``pred`` is labeled, labeled truth is aligned by dim name
+        and coordinates; otherwise it is used positionally.
+
+    Returns
+    -------
+    float
+        The elementwise CRPS averaged over every value element.
+
+    Raises
+    ------
+    ValueError
+        If there are fewer than 2 samples, a labeled ``pred`` has no sample
+        dim, or ``pred`` and ``truth`` disagree on dims, sizes, coordinates or
+        shape.
+    """
     return float(crps_empirical(pred, truth).mean())
 
 
@@ -153,6 +235,32 @@ def eval_coverage(pred, truth, *, alpha: float = 0.9) -> float:
 
     A well-calibrated forecast has coverage close to ``alpha``. Bind a
     non-default level with ``functools.partial(eval_coverage, alpha=0.8)``.
+
+    Parameters
+    ----------
+    pred : xarray.DataArray or array_like
+        Forecast samples: a DataArray with sample dims named ``chain``, ``draw``
+        or ``sample``, or an array with the sample axis first.
+    truth : xarray.DataArray or array_like
+        Ground-truth values with the prediction's shape without the sample
+        axis. When ``pred`` is labeled, labeled truth is aligned by dim name
+        and coordinates; otherwise it is used positionally.
+    alpha : float, default 0.9
+        Nominal interval probability, in the open interval (0, 1). The bounds
+        are the ``(1 - alpha) / 2`` and ``1 - (1 - alpha) / 2`` sample
+        quantiles and are inclusive.
+
+    Returns
+    -------
+    float
+        Fraction of value elements whose truth lies inside the interval.
+
+    Raises
+    ------
+    ValueError
+        If ``alpha`` is not in (0, 1), ``pred`` has no samples, a labeled
+        ``pred`` has no sample dim, or ``pred`` and ``truth`` disagree on dims,
+        sizes, coordinates or shape.
     """
     if not 0.0 < alpha < 1.0:
         msg = f"alpha must be in (0, 1), got {alpha}"
@@ -168,6 +276,31 @@ def eval_pinball(pred, truth, *, quantile: float = 0.5) -> float:
     """Mean pinball (quantile) loss of the forecast ``quantile``.
 
     At ``quantile=0.5`` this is half the mean absolute error.
+
+    Parameters
+    ----------
+    pred : xarray.DataArray or array_like
+        Forecast samples: a DataArray with sample dims named ``chain``, ``draw``
+        or ``sample``, or an array with the sample axis first.
+    truth : xarray.DataArray or array_like
+        Ground-truth values with the prediction's shape without the sample
+        axis. When ``pred`` is labeled, labeled truth is aligned by dim name
+        and coordinates; otherwise it is used positionally.
+    quantile : float, default 0.5
+        Quantile level, in the open interval (0, 1); the point estimate is the
+        corresponding sample quantile.
+
+    Returns
+    -------
+    float
+        The pinball loss averaged over every value element.
+
+    Raises
+    ------
+    ValueError
+        If ``quantile`` is not in (0, 1), ``pred`` has no samples, a labeled
+        ``pred`` has no sample dim, or ``pred`` and ``truth`` disagree on dims,
+        sizes, coordinates or shape.
     """
     if not 0.0 < quantile < 1.0:
         msg = f"quantile must be in (0, 1), got {quantile}"
@@ -182,6 +315,32 @@ def eval_interval_score(pred, truth, *, alpha: float = 0.9) -> float:
     """Mean Winkler interval score of the central ``alpha`` interval.
 
     Rewards narrow intervals, penalizes truth falling outside; lower is better.
+
+    Parameters
+    ----------
+    pred : xarray.DataArray or array_like
+        Forecast samples: a DataArray with sample dims named ``chain``, ``draw``
+        or ``sample``, or an array with the sample axis first.
+    truth : xarray.DataArray or array_like
+        Ground-truth values with the prediction's shape without the sample
+        axis. When ``pred`` is labeled, labeled truth is aligned by dim name
+        and coordinates; otherwise it is used positionally.
+    alpha : float, default 0.9
+        Nominal interval probability, in the open interval (0, 1). The bounds
+        are the ``(1 - alpha) / 2`` and ``1 - (1 - alpha) / 2`` sample
+        quantiles.
+
+    Returns
+    -------
+    float
+        The interval score averaged over every value element.
+
+    Raises
+    ------
+    ValueError
+        If ``alpha`` is not in (0, 1), ``pred`` has no samples, a labeled
+        ``pred`` has no sample dim, or ``pred`` and ``truth`` disagree on dims,
+        sizes, coordinates or shape.
     """
     if not 0.0 < alpha < 1.0:
         msg = f"alpha must be in (0, 1), got {alpha}"
@@ -201,15 +360,31 @@ def make_mase(train_data, *, seasonality: int = 1) -> Metric:
 
     MASE divides the forecast MAE (sample-median point estimate) by the
     in-sample MAE of the seasonal-naive forecast on ``train_data``. The scale
-    is computed once at factory time.
+    is computed once at factory time as a single scalar pooled over every
+    element of ``train_data`` (not per series).
 
     Parameters
     ----------
-    train_data
-        Training data — a DataArray with a ``"time"`` dim, or numpy with time
-        on axis 0.
-    seasonality
+    train_data : xarray.DataArray or array_like
+        Training data — a DataArray with a ``"time"`` dim, or an array with
+        time on axis 0.
+    seasonality : int, default 1
         Seasonal period (``>= 1``); ``1`` is the random-walk naive baseline.
+
+    Returns
+    -------
+    callable
+        A metric ``mase(pred, truth) -> float`` equal to
+        :func:`eval_mae` divided by the training scale; it accepts the same
+        ``pred``/``truth`` inputs and raises the same errors as
+        :func:`eval_mae`.
+
+    Raises
+    ------
+    ValueError
+        If ``seasonality < 1``, ``train_data`` is not longer than
+        ``seasonality`` along time, or the seasonal-naive scale is zero
+        (constant training series).
     """
     if seasonality < 1:
         msg = f"seasonality must be >= 1, got {seasonality}"
@@ -251,16 +426,27 @@ def evaluate_forecast(pred, truth, *, metrics: Mapping[str, Metric] | None = Non
 
     Parameters
     ----------
-    pred, truth
-        As accepted by the individual metrics (labeled or numpy).
-    metrics
-        Mapping of name to metric; defaults to :data:`DEFAULT_METRICS`. Bind
-        metric parameters with ``functools.partial``.
+    pred : xarray.DataArray or array_like
+        Forecast samples, passed unchanged to every metric (labeled with
+        sample dims, or an array with the sample axis first).
+    truth : xarray.DataArray or array_like
+        Ground-truth values, passed unchanged to every metric.
+    metrics : mapping, optional
+        Mapping of name to metric ``fn(pred, truth)``; ``None`` uses
+        :data:`DEFAULT_METRICS`. Bind metric parameters with
+        ``functools.partial``.
 
     Returns
     -------
-    dict[str, float]
-        Each metric name mapped to its value.
+    dict
+        Maps each metric name (``str``) to its value (``float``, cast with
+        ``float``), in the
+        mapping's iteration order.
+
+    Raises
+    ------
+    ValueError
+        If a metric rejects the inputs (see the individual metrics).
     """
     metrics = DEFAULT_METRICS if metrics is None else metrics
     return {name: float(fn(pred, truth)) for name, fn in metrics.items()}

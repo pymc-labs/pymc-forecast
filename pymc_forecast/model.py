@@ -1,5 +1,7 @@
-"""Model-building core: the train/forecast :class:`Horizon` and the primitives
-that register time-series latents and observation variables against it.
+"""Model-building core: the train/forecast Horizon and the primitives built on it.
+
+The primitives here register time-series latents and observation variables
+against the :class:`Horizon`.
 
 The package's central invariant (inherited from pyro / numpyro_forecast): **one
 model definition both trains and forecasts**. In-sample time latents live on
@@ -62,30 +64,49 @@ __all__ = [
 ]
 
 OBS_VAR = "obs"
-"""Reserved name of the observed (in-sample) variable registered by :func:`predict`."""
+"""Name of the observed (in-sample) variable registered by :func:`predict`.
+
+Also registered by :func:`~pymc_forecast.gaussian.predict_mvn`.
+"""
 
 FORECAST_VAR = "forecast"
-"""Reserved name of the forecast-horizon variable registered by :func:`predict`."""
+"""Name of the forecast-horizon variable registered by :func:`predict`.
+
+Also registered by :func:`~pymc_forecast.gaussian.predict_mvn`.
+"""
 
 EXPECTED_OBSERVATION_VAR = "expected_observation"
-"""Reserved name of the in-sample conditional expected observation registered
-by :func:`predict`, in observed outcome units and excluding observation noise."""
+"""Reserved name of the in-sample expected observation registered by :func:`predict`.
+
+It is the conditional expected observation in observed outcome units,
+excluding observation noise.
+"""
 
 EXPECTED_OBSERVATION_FORECAST_VAR = "expected_observation_future"
-"""Reserved name of the forecast-horizon conditional expected observation
-registered by :func:`predict` (see :data:`EXPECTED_OBSERVATION_VAR`)."""
+"""Reserved name of the forecast-horizon expected observation registered by :func:`predict`.
+
+See :data:`EXPECTED_OBSERVATION_VAR`.
+"""
 
 MU_VAR = "mu"
-"""Reserved name of the in-sample noise-free latent predictor registered by
-:func:`predict` — the latent passed to it, before observation noise (for
-GLM-style models this is the linear predictor, not the distribution mean)."""
+"""Reserved name of the in-sample noise-free latent predictor registered by :func:`predict`.
+
+It is the latent passed to :func:`predict`, before observation noise (for
+GLM-style models this is the linear predictor, not the distribution mean).
+"""
 
 MU_FORECAST_VAR = "mu_future"
-"""Reserved name of the forecast-horizon noise-free latent predictor
-registered by :func:`predict` (see :data:`MU_VAR`)."""
+"""Reserved name of the forecast-horizon noise-free latent predictor from :func:`predict`.
+
+See :data:`MU_VAR`.
+"""
 
 RVFactory = Callable[[str, tuple[str, ...]], pt.TensorVariable]
-"""``(name, dims) -> RV``: creates a named model variable with exactly these dims."""
+"""``(name, dims) -> RV``: creates the named model variable ``name`` with these dims.
+
+Produced by :func:`~pymc_forecast.priors.prior_rv_factory`;
+:func:`innovations` and ``ssoe`` do not accept such callables directly.
+"""
 
 ObsFactory = Callable[..., pt.TensorVariable]
 """``(name, latent, dims, observed) -> RV``: creates the observation variable.
@@ -100,15 +121,19 @@ values (``None`` for the forecast suffix and during prior-only builds).
 class Horizon:
     """The train/forecast split of a single model build, derived from coords.
 
-    Attributes
+    Each parameter is available as an attribute of the same name.
+
+    Parameters
     ----------
-    data
-        Observed data (time-first ``DataArray``), or ``None`` for prior-only
-        builds.
-    time
-        Coordinate values of the observed window (length ``t_obs``).
-    time_future
-        Coordinate values of the forecast horizon (empty while training).
+    data : xarray.DataArray or None
+        Observed data, stored as given (time-first when built by
+        :func:`build_model`), or ``None`` for prior-only builds.
+    time : numpy.ndarray
+        Coordinate values of the in-sample window (length ``t_obs``); in
+        prior-only builds, the whole covariate span.
+    time_future : numpy.ndarray, optional
+        Coordinate values of the forecast horizon. Empty whenever there is no
+        horizon. Defaults to an empty array.
     """
 
     data: xr.DataArray | None
@@ -117,12 +142,12 @@ class Horizon:
 
     @property
     def t_obs(self) -> int:
-        """Number of observed (in-sample) time steps."""
+        """Number of in-sample time steps (the full covariate span in prior-only builds)."""
         return len(self.time)
 
     @property
     def future(self) -> int:
-        """Number of forecast time steps (``0`` while training)."""
+        """Number of forecast time steps (``0`` when there is no forecast horizon)."""
         return len(self.time_future)
 
     @property
@@ -136,7 +161,29 @@ class Horizon:
 
         ``covariates`` span the full horizon; ``data`` (if given) covers the
         observed prefix. With ``data=None`` (prior-only builds) the whole
-        covariate span counts as observed time.
+        covariate span counts as observed time. No normalization is applied
+        here (:func:`build_model` normalizes with
+        :func:`~pymc_forecast.data.as_dataarray` first).
+
+        Parameters
+        ----------
+        covariates : xarray.DataArray
+            Normalized covariates with a ``"time"`` coord spanning the full
+            horizon.
+        data : xarray.DataArray or None
+            Normalized observed data with a ``"time"`` dim, or ``None`` for a
+            prior-only build.
+
+        Returns
+        -------
+        Horizon
+            The derived horizon; ``data`` is stored as given.
+
+        Raises
+        ------
+        pymc_forecast.exceptions.AlignmentError
+            If ``data`` is given and is not aligned with ``covariates``
+            (see :func:`~pymc_forecast.data.validate_alignment`).
         """
         cov_time = np.asarray(covariates[TIME_DIM].values)
         if data is None:
@@ -179,8 +226,34 @@ def innovations(
     a model variable (``sigma = pm.HalfNormal("sigma", 1)``) and pass
     ``pm.Normal.dist(0, sigma)``.
 
-    Returns the latent over the full horizon, concatenated on axis 0. When
-    ``h.future == 0`` the forecast suffix is omitted.
+    Parameters
+    ----------
+    h : Horizon
+        The horizon of the current model build.
+    name : str
+        Base variable name of the in-sample latent; the forecast segment is
+        registered as ``f"{name}_future"``.
+    dist : pymc_extras.prior.Prior or pytensor.tensor.TensorVariable
+        A pymc-extras ``Prior`` or an unnamed ``.dist()`` tensor.
+    dims : tuple of str, default ``()``
+        Extra (non-time) dims of the per-step latent; each must be a model
+        coord.
+
+    Returns
+    -------
+    pytensor.tensor.TensorVariable
+        The latent over the full horizon, time on axis 0. When
+        ``h.future == 0`` this is the registered model variable ``name``
+        itself; otherwise it is an unnamed concatenation of ``name`` and
+        ``{name}_future`` with shape ``(h.duration, *dim lengths)``.
+
+    Raises
+    ------
+    pymc_forecast.exceptions.HorizonError
+        If ``dist`` is neither a ``Prior`` nor an unnamed ``.dist()``, is a
+        model variable, depends on unnamed random variables, or has more axes
+        than ``dims``; if a ``.dist()`` latent needs a dim that is not a model
+        coord; or if a ``Prior`` has a time-dimmed hyper-prior.
     """
     if is_prior_like(dist):
         rv_fn = prior_rv_factory(dist, name)
@@ -395,13 +468,13 @@ def predict(
 
     Parameters
     ----------
-    h
+    h : Horizon
         The horizon of the current model build.
-    obs
+    obs : pymc_extras.prior.Prior, callable or pytensor.tensor.TensorVariable
         Observation specification, dispatched in order:
 
-        - a pymc-extras ``Prior`` (``mu`` left unset; nested hyper-priors
-          shared across segments);
+        - a pymc-extras ``Prior`` (``mu`` must be left unset; nested
+          hyper-priors are shared across segments);
         - a 4-argument factory ``(name, latent, dims, observed) -> RV``: a
           callable with at least four positional parameters, or one that
           binds four positional arguments but not one (e.g. a
@@ -414,20 +487,33 @@ def predict(
           model variables: create them in the model body and close over them;
         - a zero-centered ``pm.Normal.dist`` / ``pm.StudentT.dist`` whose
           location is replaced by the segment latent.
+    latent : pytensor.tensor.TensorVariable
+        Full-horizon predictor with time on axis 0; its length along axis 0
+        must be ``h.duration``.
+    expected_observation : pytensor.tensor.TensorVariable, optional
+        Full-horizon conditional expected observation in observed outcome
+        units, with time on axis 0. For a Poisson log-link model whose
+        ``latent`` is ``eta``, pass ``pt.exp(eta)``. ``None`` registers no
+        expected-observation variables; their names are reserved either way.
+    dims : tuple of str, optional
+        Extra (non-time) dims of the observation. ``None`` infers them from
+        the data's non-time dims (``()`` for prior-only builds).
 
-        Any other dist, a non-zero location, a model variable instead of a
-        ``.dist()``, or a ``.dist()`` depending on unnamed random variables
-        raises :class:`~pymc_forecast.exceptions.HorizonError`.
-    latent
-        Full-horizon predictor with time on axis 0.
-    expected_observation
-        Optional full-horizon conditional expected observation in observed
-        outcome units, with time on axis 0. For a Poisson log-link model whose
-        ``latent`` is ``eta``, pass ``pt.exp(eta)``. Its generated variable
-        names are reserved whether or not this argument is provided.
-    dims
-        Extra (non-time) dims of the observation. Default: inferred from the
-        data's non-time dims (``()`` for prior-only builds).
+    Raises
+    ------
+    pymc_forecast.exceptions.HorizonError
+        If the model already defines ``"mu"``, ``"mu_future"``,
+        ``"expected_observation"`` or ``"expected_observation_future"``
+        (including a second ``predict`` call in one model); or if ``obs`` is
+        invalid: any other dist, a non-zero location, a bare ``.dist``
+        classmethod whose first parameter is not ``mu``, a callable that
+        creates model variables or does not return a ``.dist()``, a model
+        variable instead of a ``.dist()``, a ``.dist()`` depending on unnamed
+        random variables, or a ``Prior`` with a time-dimmed hyper-prior.
+    ValueError
+        If ``obs`` is a ``Prior`` with ``mu`` set.
+    KeyError
+        If an entry of ``dims`` is not a model coord.
     """
     if is_prior_like(obs):
         obs = prior_obs_factory(obs, OBS_VAR)
@@ -484,9 +570,10 @@ class ForecastingModel(PriorConfig, abc.ABC):
     """Object-oriented facade over the functional primitives.
 
     Subclasses implement :meth:`model` and use the bound helpers
-    :meth:`innovations` / :meth:`predict`, which thread the current
-    :class:`Horizon` automatically. An instance is a valid model function for
-    :func:`build_model` and the forecaster classes.
+    :meth:`innovations`, :meth:`predict` and :meth:`markov_series`, which thread
+    the current :class:`Horizon` (available as :attr:`horizon`) automatically.
+    An instance is a valid model function for :func:`build_model` and the
+    forecaster classes.
 
     Priors are user-injectable (see :class:`~pymc_forecast.priors.PriorConfig`):
     a subclass declares its overridable defaults in
@@ -494,7 +581,10 @@ class ForecastingModel(PriorConfig, abc.ABC):
     ``self.prior_config[...]`` in the model body; callers override any subset
     at construction time::
 
+        import pytensor.tensor as pt
         from pymc_extras.prior import Prior
+
+        from pymc_forecast.model import ForecastingModel
 
         class LocalLevel(ForecastingModel):
             default_priors = {
@@ -507,17 +597,40 @@ class ForecastingModel(PriorConfig, abc.ABC):
                 self.predict(self.prior_config["noise"], pt.cumsum(drift))
 
         LocalLevel(priors={"drift": Prior("StudentT", nu=4, mu=0, sigma=0.2)})
+
+    Parameters
+    ----------
+    priors : mapping, optional
+        Named prior overrides merged over ``default_priors``. ``None`` keeps
+        the defaults.
     """
 
     _horizon: Horizon | None = None
 
     @abc.abstractmethod
     def model(self, covariates, data=None) -> None:
-        """Define the generative model; call :meth:`predict` exactly once."""
+        """Define the generative model.
+
+        The body must register the ``"obs"`` variable exactly once, normally by
+        calling :meth:`predict` once (a second call raises
+        :class:`~pymc_forecast.exceptions.HorizonError`).
+
+        Parameters
+        ----------
+        covariates : xarray.DataArray
+            Normalized (time-first) covariates spanning the full horizon.
+        data : xarray.DataArray, optional
+            Normalized (time-first) observed data; ``None`` for prior-only
+            builds.
+        """
 
     @property
     def horizon(self) -> Horizon:
-        """The :class:`Horizon` of the model build currently in progress."""
+        """The :class:`Horizon` of the model build currently in progress.
+
+        Raises :class:`~pymc_forecast.exceptions.HorizonError` when accessed
+        outside a model build.
+        """
         return self._require_horizon()
 
     def _require_horizon(self) -> Horizon:
@@ -527,7 +640,30 @@ class ForecastingModel(PriorConfig, abc.ABC):
         return self._horizon
 
     def innovations(self, name, dist, *, dims=()) -> pt.TensorVariable:
-        """Bound :func:`innovations` using the current build's horizon."""
+        """Bound :func:`~pymc_forecast.model.innovations` using the current build's horizon.
+
+        Parameters
+        ----------
+        name : str
+            Base variable name; the forecast segment is ``f"{name}_future"``.
+        dist : pymc_extras.prior.Prior or pytensor.tensor.TensorVariable
+            A pymc-extras ``Prior`` or an unnamed ``.dist()`` tensor.
+        dims : tuple of str, default ``()``
+            Extra (non-time) dims of the per-step latent; each must be a model
+            coord.
+
+        Returns
+        -------
+        pytensor.tensor.TensorVariable
+            The latent over the full horizon, time on axis 0 (see
+            :func:`~pymc_forecast.model.innovations`).
+
+        Raises
+        ------
+        pymc_forecast.exceptions.HorizonError
+            If called outside a model build, or for the conditions listed in
+            :func:`~pymc_forecast.model.innovations`.
+        """
         return innovations(self._require_horizon(), name, dist, dims=dims)
 
     def predict(
@@ -538,7 +674,32 @@ class ForecastingModel(PriorConfig, abc.ABC):
         expected_observation: pt.TensorVariable | None = None,
         dims: tuple[str, ...] | None = None,
     ) -> None:
-        """Bound :func:`predict` using the current build's horizon."""
+        """Bound :func:`~pymc_forecast.model.predict` using the current build's horizon.
+
+        Parameters
+        ----------
+        obs : pymc_extras.prior.Prior, callable or pytensor.tensor.TensorVariable
+            Observation specification (see :func:`~pymc_forecast.model.predict`).
+        latent : pytensor.tensor.TensorVariable
+            Full-horizon predictor with time on axis 0 and length
+            ``horizon.duration``.
+        expected_observation : pytensor.tensor.TensorVariable, optional
+            Full-horizon conditional expected observation in observed outcome
+            units. ``None`` registers no expected-observation variables.
+        dims : tuple of str, optional
+            Extra (non-time) dims of the observation. ``None`` infers them from
+            the data's non-time dims (``()`` for prior-only builds).
+
+        Raises
+        ------
+        pymc_forecast.exceptions.HorizonError
+            If called outside a model build, or for the conditions listed in
+            :func:`~pymc_forecast.model.predict`.
+        ValueError
+            If ``obs`` is a ``Prior`` with ``mu`` set.
+        KeyError
+            If an entry of ``dims`` is not a model coord.
+        """
         predict(
             self._require_horizon(),
             obs,
@@ -548,7 +709,37 @@ class ForecastingModel(PriorConfig, abc.ABC):
         )
 
     def markov_series(self, name, init, transition, *, params=(), xs=None, dims=()):
-        """Bound :func:`~pymc_forecast.markov.markov_series` using this build's horizon."""
+        """Bound :func:`~pymc_forecast.markov.markov_series` using this build's horizon.
+
+        Parameters
+        ----------
+        name : str
+            Base variable name; the forecast segment is ``f"{name}_future"``.
+        init : float, array_like or pytensor.tensor.TensorVariable
+            Initial state fed to the first transition (cast to float64).
+        transition : callable
+            ``(z_prev, *params) -> dist`` (with ``xs``:
+            ``(z_prev, x_t, *params) -> dist``) returning a ``.dist()``.
+        params : sequence, default ``()``
+            Random variables the transition uses, passed as explicit inputs.
+        xs : array_like, optional
+            Exogenous inputs, positional with time on axis 0 and at least
+            ``horizon.duration`` rows. ``None`` means no inputs.
+        dims : tuple of str, default ``()``
+            Extra (non-time) dims of the per-step state.
+
+        Returns
+        -------
+        pytensor.tensor.TensorVariable
+            The latent over the full horizon, time on axis 0 (see
+            :func:`~pymc_forecast.markov.markov_series`).
+
+        Raises
+        ------
+        pymc_forecast.exceptions.HorizonError
+            If called outside a model build, or for the conditions listed in
+            :func:`~pymc_forecast.markov.markov_series`.
+        """
         from pymc_forecast.markov import markov_series
 
         return markov_series(
@@ -596,22 +787,46 @@ def build_model(
     The horizon is derived from the time coords: covariates span the full
     horizon, data covers the observed prefix. Registered coords: ``"time"``
     (observed steps), ``"time_future"`` (forecast steps, only when
-    forecasting), every non-time dim of data/covariates, plus any user
-    ``coords``.
+    forecasting), every non-time dim of data/covariates (data dims take
+    precedence over covariate dims of the same name; unlabeled dims get
+    integer coords), plus any user ``coords``, which are applied last and
+    override the derived coords.
 
     Parameters
     ----------
-    model_fn
+    model_fn : callable or ForecastingModel
         The model body ``(covariates, data) -> None`` or a
-        :class:`ForecastingModel` instance.
-    data
-        Observed data (DataArray / Series / DataFrame / ndarray), or ``None``
-        for a prior-only build over the whole covariate span.
-    covariates
-        Covariates spanning the full horizon (use
+        :class:`ForecastingModel` instance. It is called with the normalized
+        (time-first) ``xarray.DataArray`` covariates and data (or ``None``).
+    data : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like
+        Observed training series, normalized with
+        :func:`~pymc_forecast.data.as_dataarray` (``"time"`` first; 2-D input
+        gets a ``"series"`` dim). ``None`` gives a prior-only build over the
+        whole covariate span (``obs`` is then unobserved).
+    covariates : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like
+        Covariates spanning the full horizon, normalized with ``as_dataarray``
+        (2-D input gets a ``"covariate"`` dim). Rows past the end of ``data``
+        define the forecast horizon (use
         :func:`~pymc_forecast.data.null_covariates` if the model has none).
-    coords
-        Extra coords to register on the model.
+    coords : mapping, optional
+        Extra coords to register on the model; they override derived coords of
+        the same name. ``None`` adds none.
+
+    Returns
+    -------
+    pymc.Model
+        The built model (its context is no longer active on return).
+
+    Raises
+    ------
+    pymc_forecast.exceptions.AlignmentError
+        If ``data`` or ``covariates`` cannot be normalized (a DataArray without
+        a ``"time"`` dim, or an array that is not 1-D or 2-D), or if they are
+        misaligned (see :meth:`Horizon.from_data`).
+    pymc_forecast.exceptions.HorizonError
+        If the model body registered no ``"obs"`` variable. Errors raised by
+        the model body itself (e.g. by :func:`predict` or :func:`innovations`)
+        propagate unchanged.
     """
     cov_da = as_dataarray(covariates, role="covariates")
     data_da = None if data is None else as_dataarray(data, role="data")

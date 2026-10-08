@@ -1,7 +1,7 @@
 """Interop with the pymc-extras ``Prior`` API: declarative, user-injectable priors.
 
 ``innovations`` and ``predict`` accept a pymc-extras
-:class:`~pymc_extras.prior.Prior`, so priors live as inspectable data on the
+``pymc_extras.prior.Prior``, so priors live as inspectable data on the
 model object instead of inside lambdas::
 
     from pymc_extras.prior import Prior
@@ -10,8 +10,9 @@ model object instead of inside lambdas::
     predict(h, Prior("Normal", sigma=Prior("HalfNormal", sigma=1)), pt.cumsum(drift))
 
 The adapters preserve the package's replay mechanism: nested hyper-priors
-(``Prior``-valued parameters) are materialized **once** per base name — e.g.
-``drift_mu``, ``obs_sigma`` — and shared between the in-sample and
+(``Prior``-valued parameters) are materialized **once** per base name as
+``{base_name}_{param}`` — e.g. ``obs_sigma`` above, or ``drift_mu`` if the
+drift prior had a ``Prior``-valued ``mu`` — and shared between the in-sample and
 ``*_future`` segments, so ``pm.sample_posterior_predictive`` replays them from
 the posterior while the future latents are drawn conditional on them. A naive
 per-segment ``create_variable`` would instead give the forecast segment fresh
@@ -36,7 +37,20 @@ _PRIOR_ATTRS = ("create_variable", "create_likelihood_variable", "deepcopy", "pa
 
 
 def is_prior_like(obj) -> bool:
-    """Whether ``obj`` structurally matches the pymc-extras ``Prior`` API."""
+    """Whether ``obj`` structurally matches the pymc-extras ``Prior`` API.
+
+    Parameters
+    ----------
+    obj : object
+        Any object.
+
+    Returns
+    -------
+    bool
+        ``True`` if ``obj`` has all of ``create_variable``,
+        ``create_likelihood_variable``, ``deepcopy``, ``parameters`` and
+        ``dims``.
+    """
     return all(hasattr(obj, attr) for attr in _PRIOR_ATTRS)
 
 
@@ -53,11 +67,11 @@ class PriorConfig:
 
     Parameters
     ----------
-    priors
-        Named overrides merged over :attr:`default_priors`; values are
-        pymc-extras ``Prior`` objects, the factory callables the model
-        primitives accept, or — for :meth:`create_prior` — any
-        ``name -> RV`` callable.
+    priors : mapping, optional
+        Named overrides merged over :attr:`default_priors` (``None`` keeps the
+        defaults); values are pymc-extras ``Prior`` objects, the factory
+        callables the model primitives accept, or — for :meth:`create_prior` —
+        any ``name -> RV`` callable. Values are not validated.
     """
 
     default_priors: Mapping[str, object] = {}
@@ -68,10 +82,12 @@ class PriorConfig:
 
     @property
     def prior_config(self) -> dict[str, object]:
-        """The effective priors: :attr:`default_priors` merged with overrides.
+        """The effective priors, :attr:`default_priors` merged with overrides.
 
-        Falls back to the defaults when a subclass ``__init__`` does not call
-        ``super().__init__()``.
+        A ``dict`` mapping names to specifications. This is the instance's
+        live mapping, not a copy, so mutating it changes the configuration.
+        Falls back to a fresh copy of the defaults when a subclass
+        ``__init__`` does not call ``super().__init__()``.
         """
         config = getattr(self, "_prior_config", None)
         return dict(self.default_priors) if config is None else config
@@ -83,6 +99,25 @@ class PriorConfig:
         either exposes ``create_variable(name)`` (a pymc-extras ``Prior``,
         created with its own dims) or is a callable ``name -> RV``, e.g.
         ``lambda name: pm.Normal(name, 0, 1)``.
+
+        Parameters
+        ----------
+        name : str
+            Key of :attr:`prior_config` and name of the created variable.
+
+        Returns
+        -------
+        pytensor.tensor.TensorVariable
+            Whatever the specification creates, normally the registered model
+            random variable.
+
+        Raises
+        ------
+        KeyError
+            If no prior is configured for ``name``.
+        TypeError
+            If the specification neither exposes ``create_variable`` nor is
+            callable.
         """
         try:
             spec = self.prior_config[name]
@@ -137,11 +172,27 @@ def _segment(materialized, dims: tuple[str, ...]):
 
 
 def prior_rv_factory(prior, base_name: str):
-    """Adapt a ``Prior`` to the :data:`~pymc_forecast.model.RVFactory` protocol.
+    """Adapt a ``Prior`` to the ``pymc_forecast.model.RVFactory`` protocol.
 
-    The returned factory creates each segment variable (``base_name``,
-    ``{base_name}_future``) from ``prior`` with the dims it is handed,
-    materializing nested hyper-priors once under ``base_name`` on first use.
+    The returned factory creates whatever variable ``name`` it is called with
+    (e.g. ``base_name`` and ``{base_name}_future``) from ``prior`` with the dims
+    it is handed, materializing nested hyper-priors once under ``base_name`` on
+    first use. It is stateful, so build a new factory for each model.
+
+    Parameters
+    ----------
+    prior : pymc_extras.prior.Prior
+        The prior to adapt; it is deep-copied, not mutated.
+    base_name : str
+        Prefix for the hyper-prior variables, named ``{base_name}_{param}``.
+
+    Returns
+    -------
+    callable
+        A factory ``rv_fn(name, dims)`` that registers and returns the variable
+        in the active ``pm.Model``. Its first call raises
+        :class:`~pymc_forecast.exceptions.HorizonError` if a nested hyper-prior
+        has a ``"time"`` or ``"time_future"`` dim.
     """
     state = {}
 
@@ -154,7 +205,7 @@ def prior_rv_factory(prior, base_name: str):
 
 
 def prior_obs_factory(prior, base_name: str):
-    """Adapt a ``Prior`` to the :data:`~pymc_forecast.model.ObsFactory` protocol.
+    """Adapt a ``Prior`` to the ``pymc_forecast.model.ObsFactory`` protocol.
 
     The prior's distribution becomes the likelihood: its location (``mu``) is
     the latent predictor handed in by :func:`~pymc_forecast.model.predict`,
@@ -165,6 +216,27 @@ def prior_obs_factory(prior, base_name: str):
     than through ``Prior.create_likelihood_variable``, which deep-copies the
     prior and would clone the shared hyper-prior variables out of the model
     graph.
+
+    Parameters
+    ----------
+    prior : pymc_extras.prior.Prior
+        The observation prior; ``mu`` must be unset and its distribution must
+        accept a ``mu`` keyword.
+    base_name : str
+        Prefix for the hyper-prior variables, named ``{base_name}_{param}``.
+
+    Returns
+    -------
+    callable
+        A factory ``obs_fn(name, latent, dims, observed)`` that registers and
+        returns the likelihood variable in the active ``pm.Model``. Its first
+        call raises :class:`~pymc_forecast.exceptions.HorizonError` if a nested
+        hyper-prior has a ``"time"`` or ``"time_future"`` dim.
+
+    Raises
+    ------
+    ValueError
+        If ``prior`` sets ``mu`` (checked immediately).
     """
     if "mu" in prior.parameters:
         msg = (

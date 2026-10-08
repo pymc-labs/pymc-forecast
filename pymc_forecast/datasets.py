@@ -60,9 +60,11 @@ def load_bart_od() -> xr.DataArray:
     Returns
     -------
     xarray.DataArray
-        Integer counts with dims ``("time", "origin", "destination")``.
-        The time coordinate is hourly from 2011-01-01, and station names label
-        both origin and destination.
+        Integer counts named ``"rides"`` with dims
+        ``("time", "origin", "destination")``. The time coordinate is hourly
+        ``datetime64`` values starting at the shards' recorded start date
+        (2011-01-01 for the current files), and station names label both
+        origin and destination.
     """
     counts = []
     stations = None
@@ -90,12 +92,14 @@ def load_bart_weekly() -> xr.DataArray:
     The series is derived at load time from the complete public BART
     origin-destination dataset used by the Pyro and NumPyro forecasting
     examples. Hourly counts are summed over all origin-destination pairs,
-    aggregated into non-overlapping weeks, and log-transformed.
+    aggregated into non-overlapping 168-hour weeks starting at the first hour
+    (a trailing partial week is dropped), and log-transformed.
 
     Returns
     -------
     xarray.DataArray
-        Log weekly totals with dims ``("time",)`` and integer week coords.
+        Log weekly totals named ``"log_rides"`` with dims ``("time",)`` and
+        integer week coords ``0..n-1``.
     """
     hourly_totals = []
     for path in _bart_file_paths():
@@ -118,7 +122,8 @@ def load_bart_weekly_by_origin(num_series: int | None = 8) -> xr.DataArray:
     """Load a weekly BART ridership panel grouped by origin station.
 
     Counts are summed over destination stations and aggregated into
-    non-overlapping weeks before applying ``log1p``. Aggregation happens a
+    non-overlapping 168-hour weeks (a trailing partial week is dropped) before
+    applying ``log1p``. Aggregation happens a
     shard at a time, avoiding materializing the much larger full
     origin-destination panel. By default only the eight busiest origins are
     returned, which keeps hierarchical examples quick; pass ``None`` for all
@@ -126,14 +131,21 @@ def load_bart_weekly_by_origin(num_series: int | None = 8) -> xr.DataArray:
 
     Parameters
     ----------
-    num_series
-        Number of busiest origin stations to retain, or ``None`` for all.
+    num_series : int, default 8
+        Number of busiest origin stations to retain, ordered busiest first
+        (by total count); ``None`` keeps all stations in source order.
 
     Returns
     -------
     xarray.DataArray
-        Log weekly counts with dims ``("time", "series")`` and station names
-        on the ``"series"`` coordinate.
+        Log weekly counts named ``"log_rides"`` with dims
+        ``("time", "series")``, integer week coords ``0..n-1`` on ``"time"``
+        and station names on the ``"series"`` coordinate.
+
+    Raises
+    ------
+    ValueError
+        If ``num_series`` is less than 1.
     """
     hourly_shards = []
     stations = None
@@ -243,7 +255,26 @@ class M5Data(NamedTuple):
     shelf price repeated over the days of ``wm_yr_wk``, NaN where the item
     was not listed. ``keys`` has one row per series with the ``id`` and the
     five hierarchy columns; ``calendar`` has one row per day; ``weights`` is
-    the official evaluation weight table.
+    the official evaluation weight table. Each field is available as an
+    attribute of the same name, and the tuple unpacks in field order.
+
+    Parameters
+    ----------
+    sales : xarray.DataArray
+        Float32 daily unit sales named ``"sales"`` with dims
+        ``("time", "series")``: training days followed by evaluation days,
+        NaN on evaluation days for series missing from the test file.
+    price : xarray.DataArray
+        Float32 daily shelf prices named ``"price"`` with the same dims and
+        coords as ``sales``.
+    keys : pandas.DataFrame
+        One row per series, in ``"series"`` order, with columns ``id``,
+        ``item_id``, ``dept_id``, ``cat_id``, ``store_id`` and ``state_id``.
+    calendar : pandas.DataFrame
+        The ``calendar.csv`` table (``date`` parsed as datetimes), one row per
+        sales day.
+    weights : pandas.DataFrame
+        The ``weights_evaluation.csv`` table, unchanged.
     """
 
     sales: xr.DataArray
@@ -385,12 +416,12 @@ def load_m5(cache_dir: str | Path | None = None) -> M5Data:
 
     The files come from Nixtla's mirror of the competition data, pinned to
     commit ``72b8e7fd`` and checked against a SHA-256 digest. The archive is
-    about 50 MB and is extracted into ``pooch.os_cache("pymc_forecast") /
-    "m5"`` (``~/.cache/pymc_forecast/m5`` on Linux,
-    ``~/Library/Caches/pymc_forecast/m5`` on macOS). Pass ``cache_dir`` to
-    read an already extracted directory instead; when every competition file
-    is in that directory, nothing is downloaded. The two returned panels hold
-    about 480 MB; parsing the CSVs peaks at about 2 GB.
+    about 50 MB and is downloaded and extracted into ``cache_dir``, by default
+    ``pooch.os_cache("pymc_forecast") / "m5"`` (``~/.cache/pymc_forecast/m5``
+    on Linux, ``~/Library/Caches/pymc_forecast/m5`` on macOS); the archive is
+    kept there next to the extracted files. When every competition file is
+    already in that directory, nothing is downloaded. The two returned panels
+    hold about 480 MB; parsing the CSVs peaks at about 2 GB.
 
     Series order follows ``sales_train_evaluation.csv``. The test file is
     aligned on the train keys, so a test-only row is ignored and a missing
@@ -398,11 +429,25 @@ def load_m5(cache_dir: str | Path | None = None) -> M5Data:
     by ``wm_yr_wk``; a calendar week absent from ``sell_prices.csv`` is NaN
     and does not shift the other weeks.
 
+    Parameters
+    ----------
+    cache_dir : str or os.PathLike, optional
+        Directory to download the archive into and extract it into (created
+        if missing); ``None`` uses ``pooch.os_cache("pymc_forecast") / "m5"``.
+
     Returns
     -------
     M5Data
         Labeled sales and price panels, identifiers, calendar, and official
         evaluation weights.
+
+    Raises
+    ------
+    ValueError
+        If a competition file lacks required columns or is inconsistent:
+        duplicate item-store keys or series ids, overlapping or non-contiguous
+        ``d_*`` day columns, duplicate store-item-week prices, a calendar
+        shorter than the sales, or duplicate calendar dates.
     """
     directory = _m5_directory(cache_dir)
     keys, sales = _sales_panel(directory)

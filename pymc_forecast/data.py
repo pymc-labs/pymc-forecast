@@ -1,10 +1,11 @@
-"""Input normalization: everything becomes an ``xarray.DataArray`` with a leading
-``"time"`` dim.
+"""Input normalization and time-index helpers for labeled time series.
 
 The package is dims/coords-first: models, forecasts, and metrics all speak
 named dimensions. Users may still pass pandas or numpy objects at the API
 boundary; this module converts them once, attaching real time coordinates
-(a ``DatetimeIndex``, periods, or a fallback integer range).
+(a ``DatetimeIndex``, periods, or a fallback integer range). Series inputs
+become ``xarray.DataArray`` objects with a leading ``"time"`` dim; the
+time-index helpers return ``pandas.Index`` objects.
 """
 
 from numbers import Integral
@@ -57,15 +58,31 @@ def as_dataarray(obj, *, role: Role = "data") -> xr.DataArray:
     - ``xarray.DataArray`` with a ``"time"`` dim (transposed time-first);
     - ``pandas.Series`` (index becomes the time coord) or ``pandas.DataFrame``
       (index → time coord, columns → ``"series"``/``"covariate"`` coord);
-    - 1-d/2-d ``numpy`` arrays (integer-range time coord is attached).
+    - 1-d/2-d array-likes converted with ``np.asarray`` (integer-range time
+      coord is attached).
 
     Parameters
     ----------
-    obj
+    obj : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like
         The object to normalize.
-    role
-        ``"data"`` or ``"covariates"``; sets the default name of the second dim
-        for 2-d pandas/numpy inputs (``"series"`` / ``"covariate"``).
+    role : {"data", "covariates"}, default "data"
+        Sets the default name of the second dim for 2-d pandas/array inputs
+        (``"series"`` / ``"covariate"``) and is used in error messages.
+
+    Returns
+    -------
+    xarray.DataArray
+        ``obj`` with ``"time"`` as the leading dim. Inputs without a time
+        coord get an integer range ``0..n-1``; a pandas ``DatetimeIndex``
+        keeps its frequency.
+
+    Raises
+    ------
+    pymc_forecast.exceptions.AlignmentError
+        If a DataArray has no ``"time"`` dim, or an array-like input is not
+        1-d or 2-d.
+    KeyError
+        If ``role`` is not ``"data"`` or ``"covariates"``.
     """
     second = _DEFAULT_SECOND_DIM[role]
     if isinstance(obj, xr.DataArray):
@@ -121,9 +138,15 @@ def null_covariates(index) -> xr.DataArray:
 
     Parameters
     ----------
-    index
+    index : array_like
         Time coordinate values spanning the full horizon (observed + future),
         e.g. a ``pandas.DatetimeIndex`` or an integer range.
+
+    Returns
+    -------
+    xarray.DataArray
+        Zeros of shape ``(len(index), 0)`` with dims ``("time", "covariate")``
+        and only a ``"time"`` coord.
     """
     index = np.asarray(index)
     return xr.DataArray(
@@ -139,13 +162,30 @@ def extend_time_index(index, horizon: int):
     Used to build the forecast horizon for covariate-free models: a
     ``DatetimeIndex`` is extended at its stored or inferred frequency, a
     ``PeriodIndex`` at its stored frequency, and a numeric index by its
-    constant step. Returns the full ``observed + horizon`` index.
+    constant step (step 1 for fewer than 2 values).
+
+    Parameters
+    ----------
+    index : array_like
+        Training time coordinate values (anything ``pandas.Index`` accepts):
+        datetime, period, or numeric.
+    horizon : int
+        Number of steps to append (non-negative; ``bool`` is rejected).
+
+    Returns
+    -------
+    pandas.Index
+        The full ``observed + horizon`` index. With ``horizon=0`` the index is
+        returned unchanged, without further checks.
 
     Raises
     ------
-    AlignmentError
-        If a datetime frequency cannot be inferred, or the numeric spacing is
-        not constant.
+    pymc_forecast.exceptions.AlignmentError
+        If ``horizon`` is not a non-negative integer, the index is empty or not
+        strictly increasing, a datetime frequency cannot be inferred (no stored
+        frequency and fewer than 3 values or an irregular index), the index is
+        not numeric, datetime or period, or the numeric spacing is not
+        constant.
     """
     import pandas as pd
 
@@ -196,18 +236,22 @@ def concat_time_index(index, future_index):
     need not be known when the model is fit). Its values must be strictly
     increasing and lie strictly after the last training value; gaps are
     allowed — forecast steps are labeled with the supplied coordinates.
-    Returns the full ``observed + future`` index.
 
     Parameters
     ----------
-    index
-        Time coordinate values of the training window.
-    future_index
+    index : array_like
+        Time coordinate values of the training window (may be empty).
+    future_index : array_like
         Time coordinate values of the forecast horizon.
+
+    Returns
+    -------
+    pandas.Index
+        The full ``observed + future`` index.
 
     Raises
     ------
-    AlignmentError
+    pymc_forecast.exceptions.AlignmentError
         If the future index is empty, not strictly increasing, does not sort
         after the training index, or cannot be compared to it.
     """
@@ -243,17 +287,32 @@ def concat_covariates(covariates, future_covariates) -> xr.DataArray:
 
     ``future_covariates`` covers only the forecast horizon (both inputs are
     normalized via :func:`as_dataarray` first); its time index must lie
-    strictly after the training window and its non-time structure — dims, and
-    covariate names in order — must match the training covariates, since
-    models consume covariate columns positionally. Every mismatch is rejected
-    explicitly, so xarray never silently aligns, reorders, or fills feature
-    columns. Returns the full-horizon covariates.
+    strictly after the training window and its non-time structure — dims in
+    the same order, and covariate names in order — must match the training
+    covariates, since models consume covariate columns positionally. Every
+    mismatch is rejected explicitly, so xarray never silently aligns,
+    reorders, or fills feature columns.
+
+    Parameters
+    ----------
+    covariates : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like
+        Training covariates, normalized with ``role="covariates"``.
+    future_covariates : xarray.DataArray, pandas.Series, pandas.DataFrame or array_like
+        Covariates for the forecast horizon only, normalized the same way. A
+        bare array gets the time coord ``0..h-1``, so pass labeled input
+        whose time coords follow the training window.
+
+    Returns
+    -------
+    xarray.DataArray
+        The full-horizon covariates, concatenated along ``"time"``.
 
     Raises
     ------
-    AlignmentError
-        On a time index that does not extend the training window, or on any
-        dim/coord mismatch.
+    pymc_forecast.exceptions.AlignmentError
+        If an input cannot be normalized, the future time index does not
+        extend the training window, or the dims (including their order),
+        sizes, or coordinates of the non-time dims differ.
     """
     covariates = as_dataarray(covariates, role="covariates")
     fut = as_dataarray(future_covariates, role="covariates")
@@ -303,6 +362,22 @@ def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
     surplus is the forecast horizon and must be strictly increasing after
     training. Shared non-time dimensions must have identical sizes and
     coordinates, so panel covariates cannot silently change series order.
+
+    Parameters
+    ----------
+    data : xarray.DataArray
+        Normalized data with a ``"time"`` dim.
+    covariates : xarray.DataArray
+        Normalized covariates with a ``"time"`` dim.
+
+    Raises
+    ------
+    pymc_forecast.exceptions.AlignmentError
+        If ``covariates`` is shorter than ``data`` along ``"time"``, the leading
+        covariate time coords differ from the data time coords, a shared
+        non-time dim differs in size or coordinates (or is labeled on one side
+        only), or the surplus time coords are not strictly increasing after
+        training.
     """
     t_obs = data.sizes[TIME_DIM]
     if covariates.sizes[TIME_DIM] < t_obs:

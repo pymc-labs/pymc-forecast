@@ -42,6 +42,20 @@ class SSOEResult:
     these symbolic tensors; ``dims`` records the remaining named dimensions.
     Use ``mu_future`` to exclude the *current* observation error, remembering
     that earlier future errors still affect the state.
+
+    Each parameter is available as an attribute of the same name.
+
+    Parameters
+    ----------
+    mu : pytensor.tensor.TensorVariable
+        In-sample one-step-ahead means, shape ``(t_obs, *row)``.
+    mu_future : pytensor.tensor.TensorVariable
+        Future means, shape ``(future, *row)`` (length zero during training).
+    y_future : pytensor.tensor.TensorVariable
+        Future simulated observations ``mu_future`` plus the current errors
+        (length zero during training).
+    dims : tuple of str
+        Non-time dims of the rows, in the order used by the tensors.
     """
 
     mu: pt.TensorVariable
@@ -196,26 +210,31 @@ def ssoe(
 
     Parameters
     ----------
-    h, name
-        Model horizon and base name of the future error variable. Only
-        ``f"{name}_future"`` is registered, and only when forecasting.
-    y
+    h : pymc_forecast.model.Horizon
+        The horizon of the current model build.
+    name : str
+        Base name of the future error variable. Only ``f"{name}_future"`` is
+        registered, and only when forecasting.
+    y : xarray.DataArray or None
         Labeled driving history. ``None`` uses ``h.data``. Must cover exactly
-        the training window. A transformed history can be supplied to compose
-        multiple recursion channels. Prior-only builds need an explicit
-        driving history; this helper does not generate an in-sample history.
-    init
-        Initial state: one tensor or a nonempty tuple of tensors. States may
+        the training window (time coords equal to ``h.time``), with finite
+        values and non-time coords matching the model coords. A transformed
+        history can be supplied to compose multiple recursion channels.
+        Prior-only builds need an explicit driving history; this helper does
+        not generate an in-sample history.
+    init : pytensor.tensor.TensorVariable or tuple of pytensor.tensor.TensorVariable
+        Initial state: one tensor-like or a nonempty ``tuple`` of them (only a
+        ``tuple`` means multiple states; each is cast to ``floatX``). States may
         have different shapes (e.g. scalar level and vector seasonality).
-    mean
+    mean : callable
         ``(state, x_t, *params) -> mu_t``. Returns the one-step-ahead mean,
         shaped like one row of ``y``. ``x_t`` is ``None`` without ``xs``.
-    update
+    update : callable
         ``(state, y_t, eps_t, x_t, *params) -> state``. Returns the next state
         with the same structure and shapes as ``init``. In-sample,
         ``eps_t = y_t - mu_t``; in the future, ``eps_t`` is freshly drawn and
         ``y_t = mu_t + eps_t``. Both callbacks must be deterministic.
-    noise
+    noise : pymc_extras.prior.Prior or pytensor.tensor.TensorVariable
         Unnamed ``.dist()`` or pymc-extras ``Prior`` for independent,
         zero-centered per-step future errors, expanded and registered as
         ``f"{name}_future"`` only. An ``RVFactory`` or other callable is
@@ -235,18 +254,20 @@ def ssoe(
         ``pm.StudentT.dist`` must have a constant zero location
         (``pm.Normal.dist(sigma)`` binds ``sigma`` as ``mu``). The locations of
         other dists are not checked.
-    xs
-        Optional labeled inputs spanning the full horizon. The time dimension
-        is selected by name, and coordinates are checked. Future inputs must
+    xs : xarray.DataArray, optional
+        Labeled inputs spanning the full horizon (``None`` means no inputs).
+        The time dimension is selected by name and its coordinates are
+        checked; non-time dims are checked only when they are model coords.
+        Values must be finite. Future inputs must
         be known covariates or explicit scenarios: never derive future update
         gates from held-out observations. Extra rows are ignored during a
         shorter training build.
-    params
+    params : sequence, default ``()``
         Tensor parameters passed explicitly to both callbacks. Required for
         random coefficients: scan cannot close over RVs, and closed-over RVs
         are not detected.
-    dims
-        Non-time observation dimensions, inferred from ``y`` by default.
+    dims : tuple of str, optional
+        Non-time observation dimensions; ``None`` infers them from ``y``.
         Labeled data are transposed into this order before entering the scan.
 
     Returns
@@ -258,11 +279,33 @@ def ssoe(
         to include the means in the standard prediction outputs. Do not add
         another observation draw to ``y_future``: it already includes noise.
 
+    Raises
+    ------
+    pymc_forecast.exceptions.HorizonError
+        If there is no observed history (``y`` and ``h.data`` are both
+        ``None``, or ``h.t_obs == 0``); if ``noise`` is invalid (see above;
+        checked on every build); or, when forecasting, if a dim in
+        ``("time_future", *dims)`` is not a model coord or a ``.dist()`` noise
+        has more axes than ``dims``.
+    pymc_forecast.exceptions.AlignmentError
+        If ``y`` or ``xs`` is not a DataArray with a ``"time"`` dim; if the time
+        coords of ``y`` differ from ``h.time``, or ``xs`` is shorter than the
+        horizon or its time coords differ; if ``dims`` does not name each
+        non-time dim of ``y`` exactly once or contains ``"time_future"``; or if
+        a dim's coords do not match the model coords.
+    ValueError
+        If ``y`` or ``xs`` has non-finite values; if ``init`` is an empty tuple;
+        or if ``mean``/``update`` violate their contract (``mean`` with the
+        wrong number of dims, ``update`` changing the state structure, count or
+        number of dims, or the callbacks creating random updates or model
+        variables).
+
     Notes
     -----
     This is an observation-driven filter, not a latent Markov process. For
     sampled hidden states use :func:`~pymc_forecast.markov.markov_series`;
-    for linear-Gaussian hidden states consider the statespace backend.
+    for linear-Gaussian hidden states consider the statespace backend
+    (:class:`~pymc_forecast.statespace.StatespaceForecaster`).
     """
     values, dims = _history(h, y, dims)
     inputs = _inputs(h, xs)

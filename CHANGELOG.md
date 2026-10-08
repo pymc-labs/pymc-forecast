@@ -12,6 +12,13 @@ breaking change, made only in a minor release and called out here.
   carry `width`/`height` attributes; the theme capped the width but kept the
   fixed height. `docs/_static/custom.css` sets `height: auto` on cell-output
   images.
+- Docs: every public function, class, method, and property now has a complete
+  NumPy-style docstring: typed `Parameters` (the API reference shows no type
+  hints, so these are the only types it renders), `Returns`, `Raises`, and
+  `Warns`. Incorrect statements were fixed, for example: `backtest` windows
+  are positional slices, `load_m5(cache_dir=...)` downloads into that directory,
+  `make_mase` pools one scale across all series, and `periodic_repeat` needs
+  `period=` for every PyTensor input.
 
 ## 0.3.0 (2026-10-05)
 
