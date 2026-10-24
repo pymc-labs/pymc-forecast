@@ -119,6 +119,66 @@ class TestMase:
         with pytest.raises(ValueError, match="longer than seasonality"):
             make_mase(np.arange(3.0), seasonality=5)
 
+    @pytest.mark.parametrize("dtype", [np.uint8, np.int8, np.uint16, np.int16, np.int32, np.uint32])
+    def test_integer_scale_matches_float64_copy(self, dtype):
+        info = np.iinfo(dtype)
+        # Span the dtype, including the minimum, so subtraction and abs can wrap.
+        train = np.array(
+            [info.min, info.max, 0, 1, info.min, info.max // 2, 5, 3, 8, 1],
+            dtype=dtype,
+        )
+        oracle = train.astype(np.float64)
+        for seasonality in (1, 2):
+            assert _mase_scale(train, seasonality) == _mase_scale(oracle, seasonality)
+            assert _mase_scale(train, seasonality) > 0.0
+
+    def test_uint8_cited_series_is_not_the_wrapped_scale(self):
+        train = np.array([5, 3, 8, 1], dtype=np.uint8)
+        # seasonality 1 wraps to 169.333...; the float64 scale is 4.666...
+        assert _mase_scale(train, 1) == pytest.approx(4.666666666666667)
+        assert _mase_scale(train, 1) == _mase_scale(train.astype(np.float64), 1)
+        assert _mase_scale(train, 2) == _mase_scale(train.astype(np.float64), 2)
+
+    def test_int16_minimum_scale_is_positive(self):
+        train = np.array([0, np.iinfo(np.int16).min, 1, np.iinfo(np.int16).min], dtype=np.int16)
+        got = _mase_scale(train, 1)
+        assert got > 0.0
+        assert got == _mase_scale(train.astype(np.float64), 1)
+
+    def test_constant_integer_series_rejected(self):
+        with pytest.raises(ValueError, match="scale is zero"):
+            make_mase(np.full(6, 3, dtype=np.int16))
+
+    def test_short_integer_series_rejected(self):
+        with pytest.raises(ValueError, match="longer than seasonality"):
+            make_mase(np.arange(3, dtype=np.uint8), seasonality=3)
+
+    def test_float64_scale_is_bitwise_identical(self):
+        train = np.array([0.1, 0.2, 0.4, 1.0 / 3, np.pi, -1e-16], dtype=np.float64)
+        expected = float(np.abs(train[1:] - train[:-1]).mean())
+        assert _mase_scale(train, 1) == expected
+
+    def test_float32_accumulates_in_float64(self):
+        train = np.array([1e-8, 2e-8, 3.1, 3.1 + 1e-7, -4.5], dtype=np.float32)
+        expected = float(
+            np.abs(train.astype(np.float64)[1:] - train.astype(np.float64)[:-1]).mean()
+        )
+        assert _mase_scale(train, 1) == expected
+
+    def test_integer_panel_stays_one_pooled_scalar(self):
+        train = np.array([[1, 10], [2, 0], [4, 8], [9, 1]], dtype=np.uint8)
+        oracle = train.astype(np.float64)
+        expected = float(np.abs(oracle[1:] - oracle[:-1]).mean())
+        assert _mase_scale(train, 1) == expected
+
+
+def _mase_scale(train, seasonality: int) -> float:
+    """Recover the closed-over seasonal-naive scale from a unit MAE."""
+    metric = make_mase(train, seasonality=seasonality)
+    pred = np.zeros((2, 1))
+    truth = np.ones(1)
+    return eval_mae(pred, truth) / metric(pred, truth)
+
 
 class TestLabeledInputs:
     @pytest.mark.parametrize("metric", list(DEFAULT_METRICS.values()))

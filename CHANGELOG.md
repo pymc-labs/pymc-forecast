@@ -8,6 +8,10 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- `make_mase` accumulates the seasonal-naive scale in float64. Integer and
+  low-precision training series no longer wrap into a negative or hugely
+  inflated scale.
+
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the
   fixed height. `docs/_static/custom.css` sets `height: auto` on cell-output
