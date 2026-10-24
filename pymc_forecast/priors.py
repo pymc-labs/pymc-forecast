@@ -22,8 +22,10 @@ On model objects, :class:`PriorConfig` turns those specifications into a
 named, overridable configuration: subclasses declare ``default_priors`` and
 callers replace any subset with ``priors={...}`` at construction time.
 
-pymc-extras is never imported here — ``Prior`` objects are recognized
-structurally — so the core package keeps that dependency optional.
+pymc-extras is not imported at module import — ``Prior`` objects are recognized
+structurally — so the core package keeps that dependency optional. The
+observation factory imports ``handle_dims`` only when it aligns a shared
+hyper-prior to the likelihood dims.
 """
 
 from collections.abc import Mapping
@@ -137,14 +139,59 @@ class PriorConfig:
         raise TypeError(msg)
 
 
+def _shared_hyperprior_cls():
+    """``Prior`` subclass whose ``create_variable`` returns an existing RV.
+
+    Built on first use so importing this module does not import pymc-extras.
+    Subclassing is required: ``Prior._create_non_centered_variable`` name-aligns
+    ``mu`` and ``sigma`` only when ``isinstance(parameter, Prior)``. A plain
+    wrapper is splatted into ``mu + sigma * offset`` and raises. A raw tensor
+    would trailing-broadcast. ``create_variable`` returns the already-created
+    RV, so a later segment re-aligns that one variable instead of drawing another.
+    """
+    global _SHARED_HYPERPRIOR_CLS
+    if _SHARED_HYPERPRIOR_CLS is None:
+        from pymc_extras.prior import Prior
+
+        class _SharedHyperprior(Prior):
+            def __init__(self, value, dims):
+                # Not ``Prior.__init__``: this stamps an existing RV.
+                # Set ``_dims`` directly. The ``dims`` setter calls
+                # ``_param_dims_work``, which requires a real ``Prior``.
+                self.value = value
+                self.parameters = {}
+                if dims is None:
+                    self._dims = None
+                elif isinstance(dims, str):
+                    self._dims = (dims,)
+                else:
+                    self._dims = tuple(dims)
+
+            def create_variable(self, name: str, xdist: bool = False):
+                return self.value
+
+        _SHARED_HYPERPRIOR_CLS = _SharedHyperprior
+    return _SHARED_HYPERPRIOR_CLS
+
+
+_SHARED_HYPERPRIOR_CLS = None
+
+
+def _is_shared_hyperprior(value) -> bool:
+    cls = _SHARED_HYPERPRIOR_CLS
+    return cls is not None and isinstance(value, cls)
+
+
 def _materialize_hyperpriors(prior, base_name: str):
     """Create nested ``Prior`` parameters once, as ``{base_name}_{param}`` variables.
 
     Returns a copy of ``prior`` whose ``Prior``-valued parameters are replaced
-    by model variables, so every segment built from the copy shares them. Must
-    run inside a model context.
+    by shared-hyperprior wrappers around those variables, so every segment
+    built from the copy shares them and name-aligns them to its own dims.
+    Must run inside a model context.
     """
     materialized = prior.deepcopy()
+    wrapper = _shared_hyperprior_cls()
     for key, value in list(materialized.parameters.items()):
         if not is_prior_like(value):
             continue
@@ -156,7 +203,10 @@ def _materialize_hyperpriors(prior, base_name: str):
                 "train/forecast split; use a callable factory instead of a Prior"
             )
             raise HorizonError(msg)
-        materialized.parameters[key] = value.create_variable(f"{base_name}_{key}")
+        materialized.parameters[key] = wrapper(
+            value.create_variable(f"{base_name}_{key}"),
+            value.dims,
+        )
     return materialized
 
 
@@ -250,8 +300,20 @@ def prior_obs_factory(prior, base_name: str):
         if "materialized" not in state:
             state["materialized"] = _materialize_hyperpriors(prior, base_name)
         segment = state["materialized"]
+        # Not create_variable: a wrapper must not be splatted into the
+        # distribution. Align here with the same function the RV path uses.
+        from pymc_extras.prior import handle_dims
+
+        parameters = {
+            key: (
+                handle_dims(value.value, value.dims or (), tuple(dims))
+                if _is_shared_hyperprior(value)
+                else value
+            )
+            for key, value in segment.parameters.items()
+        }
         return segment.pymc_distribution(
-            name, mu=latent, observed=observed, dims=tuple(dims), **segment.parameters
+            name, mu=latent, observed=observed, dims=tuple(dims), **parameters
         )
 
     return obs_fn
