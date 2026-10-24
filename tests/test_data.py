@@ -49,6 +49,54 @@ class TestAsDataarray:
         assert da.dims == ("time", "covariate")
         assert list(da["covariate"].values) == ["a", "b"]
 
+    @pytest.mark.parametrize("axis_name", ["date", "covariate", "series"])
+    @pytest.mark.parametrize("container", [pd.Series, pd.DataFrame])
+    def test_named_index_is_not_a_dim(self, container, axis_name):
+        index = pd.Index([10, 20, 30], name=axis_name)
+        values = [1.0, 2.0, 3.0]
+        da = as_dataarray(container(values, index=index))
+        assert da["time"].dims == ("time",)
+        selected = np.atleast_1d(da.sel(time=10).values)
+        np.testing.assert_array_equal(selected, [values[0]])
+
+    @pytest.mark.parametrize("axis_name", ["covariate", "series", "date"])
+    def test_square_named_index_selects_the_row(self, axis_name):
+        frame = pd.DataFrame(
+            [[1.0, 2.0], [3.0, 4.0]],
+            index=pd.Index(["x", "y"], name=axis_name),
+            columns=["p", "q"],
+        )
+        da = as_dataarray(frame, role="covariates")
+        assert da.dims == ("time", "covariate")
+        np.testing.assert_array_equal(da.sel(time="x").values, [1.0, 2.0])
+
+    @pytest.mark.parametrize("axis_name", ["time", "series", "covariate"])
+    def test_named_columns_are_not_a_dim(self, axis_name):
+        frame = pd.DataFrame(
+            [[1.0, 2.0], [3.0, 4.0]],
+            columns=pd.Index(["a", "b"], name=axis_name),
+        )
+        da = as_dataarray(frame)
+        assert da.dims == ("time", "series")
+        assert da["series"].dims == ("series",)
+        assert list(da["series"].values) == ["a", "b"]
+        np.testing.assert_array_equal(da.sel(time=0).values, [1.0, 2.0])
+
+    def test_named_tz_aware_datetime_index_keeps_zone_and_freq(self):
+        index = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC", name="date")
+        da = as_dataarray(pd.Series([1.0, 2.0, 3.0], index=index))
+        converted = da.get_index("time")
+        assert converted.tz == index.tz
+        assert converted.freq == index.freq
+        assert converted.name != "date"
+
+    def test_multiindex_is_not_renamed(self):
+        index = pd.MultiIndex.from_product([["a", "b"], [0, 1]], names=["group", "step"])
+        frame = pd.DataFrame({"v": [1.0, 2.0, 3.0, 4.0]}, index=index)
+        da = as_dataarray(frame)
+        assert da.dims == ("time", "series")
+        assert list(da.get_index("time").names) == ["group", "step"]
+
     def test_dataarray_transposed_time_first(self):
         da_in = xr.DataArray(np.zeros((2, 3)), dims=("series", "time"), coords={"time": [0, 1, 2]})
         da = as_dataarray(da_in)
