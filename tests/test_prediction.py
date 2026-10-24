@@ -454,6 +454,29 @@ class TestPosteriorCoordAlignment:
         with pytest.raises(AlignmentError, match="level"):
             predict_in_sample(_level_panel, posterior, data, cov, random_seed=0)
 
+    def test_transposed_equal_length_dims_are_not_replayed_positionally(self):
+        def model_fn(covariates, data=None):
+            h = Horizon.from_data(covariates, data)
+            level = pm.Normal("level", dims=("time", "series"))
+            predict(h, lambda loc: pm.Normal.dist(loc, 1.0), level)
+
+        data = _panel(["a", "b"], [10, 20])
+        cov = xr.DataArray(np.zeros((2, 0)), dims=("time", "covariate"), coords={"time": [10, 20]})
+        # Model order is (time, series). Storage is (series, time): a=[1, 2], b=[10, 20].
+        # Positional replay would put 2.0 at series b, time 10.
+        values = np.array([[[[1.0, 2.0], [10.0, 20.0]]]])
+        posterior = xr.Dataset(
+            {"level": (("chain", "draw", "series", "time"), values)},
+            coords={
+                "chain": [0],
+                "draw": [3],
+                "series": ["a", "b"],
+                "time": [10, 20],
+            },
+        )
+        with pytest.raises(AlignmentError, match="level"):
+            predict_in_sample(model_fn, posterior, data, cov, random_seed=0)
+
     def test_matched_order_returns_labeled_value(self):
         data = _panel(["a", "b"], [10, 20, 30])
         cov = xr.DataArray(

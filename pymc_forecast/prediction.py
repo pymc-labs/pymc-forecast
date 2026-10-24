@@ -246,11 +246,12 @@ def _require_posterior_coords(posterior_ds: xr.Dataset, model: pm.Model) -> None
             continue
         expected_dims = tuple(dim for dim in model_dims[name] if dim not in sample_dims)
         got_dims = tuple(dim for dim in var.dims if dim not in sample_dims)
-        if set(got_dims) != set(expected_dims):
+        if got_dims != expected_dims:
             msg = (
                 f"posterior variable {name!r} dims {got_dims} must match the model "
-                f"dims {expected_dims}; a renamed or missing dimension is replayed "
-                "positionally and stamped with the model's coordinates"
+                f"dims {expected_dims} in name and order; a renamed, missing, or "
+                "transposed dimension is replayed positionally and stamped with "
+                "the model's coordinates"
             )
             raise AlignmentError(msg)
         for dim in expected_dims:
