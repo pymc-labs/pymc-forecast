@@ -309,3 +309,69 @@ class TestNestedPriorDims:
             )
             with pytest.raises(UnsupportedShapeError):
                 factory("drift", ("time", "b"))
+
+    def test_noncentered_nested_matches_create_variable(self):
+        import pymc as pm
+
+        from pymc_forecast.priors import prior_rv_factory
+
+        coords = {
+            "time": range(4),
+            "time_future": range(3),
+            "a": ["x", "y"],
+            "b": ["p", "q", "r"],
+        }
+        nested = Prior("Normal", mu=[-5.0, 8.0], sigma=0.01, dims="a")
+        dims = ("time", "a", "b")
+        future_dims = ("time_future", "b", "a")
+        with pm.Model(coords=coords) as model:
+            reference = Prior(
+                "Normal", mu=nested, sigma=0.01, centered=False, dims=dims
+            ).create_variable("ref")
+            factory = prior_rv_factory(
+                Prior(
+                    "Normal",
+                    mu=Prior("Normal", mu=[-5.0, 8.0], sigma=0.01, dims="a"),
+                    sigma=0.01,
+                    centered=False,
+                ),
+                "drift",
+            )
+            got = factory("drift", dims)
+            future = factory("drift_future", future_dims)
+            assert tuple(got.shape.eval()) == tuple(reference.shape.eval()) == (4, 2, 3)
+            assert tuple(future.shape.eval()) == (3, 3, 2)
+            assert [rv.name for rv in model.free_RVs].count("drift_mu") == 1
+            draw = pm.sample_prior_predictive(
+                40, var_names=["drift_future"], random_seed=SEED
+            ).prior["drift_future"]
+            by_a = draw.mean(("chain", "draw", "time_future")).std("b")
+            by_b = draw.mean(("chain", "draw", "time_future")).std("a")
+            assert float(by_a.max()) < 0.05
+            assert float(by_b.min()) > 1.0
+
+    def test_noncentered_scalar_nested_builds(self):
+        import pymc as pm
+
+        from pymc_forecast.priors import prior_rv_factory
+
+        coords = {"time": range(4), "a": ["x", "y"]}
+        with pm.Model(coords=coords) as model:
+            reference = Prior(
+                "Normal",
+                mu=Prior("Normal", mu=0.0, sigma=1.0),
+                sigma=0.01,
+                centered=False,
+                dims=("time", "a"),
+            ).create_variable("ref")
+            got = prior_rv_factory(
+                Prior(
+                    "Normal",
+                    mu=Prior("Normal", mu=0.0, sigma=1.0),
+                    sigma=0.01,
+                    centered=False,
+                ),
+                "drift",
+            )("drift", ("time", "a"))
+            assert tuple(got.shape.eval()) == tuple(reference.shape.eval()) == (4, 2)
+            assert [rv.name for rv in model.free_RVs].count("drift_mu") == 1
