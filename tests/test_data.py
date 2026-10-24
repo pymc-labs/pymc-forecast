@@ -297,3 +297,17 @@ class TestTimezonePreserved:
         with pytest.raises(AlignmentError, match="misaligned"):
             validate_alignment(data, aware_prefix)
         validate_alignment(data, cov)
+
+    def test_mixed_zones_rejected(self):
+        train = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="Asia/Kolkata")
+        future = pd.date_range("2020-01-11 02:00", periods=2, freq="h", tz="America/New_York")
+        with pytest.raises(AlignmentError, match="timezone"):
+            concat_time_index(train, future)
+        mixed = pd.Index(
+            [
+                pd.Timestamp("2020-01-11 02:00", tz="Pacific/Chatham"),
+                pd.Timestamp("2020-01-11 03:00", tz="Pacific/Auckland"),
+            ]
+        )
+        with pytest.raises(AlignmentError, match="mixes timezones"):
+            concat_time_index(train, mixed)

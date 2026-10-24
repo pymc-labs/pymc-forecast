@@ -169,6 +169,30 @@ def as_time_index(index):
     return pd.Index(index)
 
 
+def _single_zone(index):
+    """Timezone of ``index``, or ``None`` when it has none.
+
+    An object index of timestamps may carry more than one zone. That is not a
+    time index this package can extend or stamp.
+    """
+    tz = getattr(index, "tz", None)
+    if tz is not None:
+        return tz
+    dtype = getattr(index, "dtype", None)
+    if dtype is None or dtype.kind != "O":
+        return None
+    zones = []
+    for value in index:
+        tzinfo = getattr(value, "tzinfo", None)
+        if tzinfo is None or any(tzinfo == existing for existing in zones):
+            continue
+        zones.append(tzinfo)
+    if len(zones) > 1:
+        msg = "time index mixes timezones; pass one zone"
+        raise AlignmentError(msg)
+    return zones[0] if zones else None
+
+
 def null_covariates(index) -> xr.DataArray:
     """Zero-width covariates carrying only the time coord.
 
@@ -293,13 +317,21 @@ def concat_time_index(index, future_index):
     ------
     pymc_forecast.exceptions.AlignmentError
         If the future index is empty, not strictly increasing, does not sort
-        after the training index, or cannot be compared to it.
+        after the training index, mixes timezones, or cannot be compared to it.
     """
 
     idx = as_time_index(index)
     fut = as_time_index(future_index)
     if len(fut) == 0:
         msg = "future time index is empty; supply at least one forecast step"
+        raise AlignmentError(msg)
+    idx_tz = _single_zone(idx)
+    fut_tz = _single_zone(fut)
+    if idx_tz is not None and fut_tz is not None and idx_tz != fut_tz:
+        msg = (
+            "future time index timezone does not match the training timezone: "
+            f"{fut_tz!r} vs {idx_tz!r}"
+        )
         raise AlignmentError(msg)
     if not (fut.is_monotonic_increasing and fut.is_unique):
         msg = "future time index must be strictly increasing"
