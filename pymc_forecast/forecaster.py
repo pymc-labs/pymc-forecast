@@ -377,7 +377,12 @@ class BaseForecaster(abc.ABC):
             strictly increasing, or does not start after the training window;
             if the covariate structure does not match the training covariates;
             or if the covariates cannot be normalized or do not align with the
-            training data.
+            training data. Also if a non-sample coordinate on ``posterior``
+            (any dim other than ``"chain"`` and ``"draw"``) is missing,
+            duplicated, or not identical in labels and order to the model
+            coordinate. A dimension whose name is not the model's is rejected
+            the same way. ``"time"`` must match the training window, not
+            ``"time_future"``. The posterior is not reindexed.
         pymc_forecast.exceptions.HorizonError
             If the resulting horizon is empty (e.g. ``horizon=0``).
         TypeError
@@ -476,6 +481,12 @@ class BaseForecaster(abc.ABC):
             ``num_samples`` is not positive.
         TypeError
             If ``posterior`` has no ``posterior`` group.
+        pymc_forecast.exceptions.AlignmentError
+            If a non-sample coordinate on ``posterior`` (any dim other than
+            ``"chain"`` and ``"draw"``) is missing, duplicated, or not
+            identical in labels and order to the model coordinate. A dimension
+            whose name is not the model's is rejected the same way. The
+            posterior is not reindexed.
         """
         self._require_fitted()
         posterior = self._resolve_posterior(posterior, num_samples, random_seed)
