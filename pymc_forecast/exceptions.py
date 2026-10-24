@@ -42,7 +42,9 @@ class AlignmentError(PymcForecastError, ValueError):
 
     Covers data/covariate misalignment as well as invalid input shapes (e.g.
     no ``"time"`` dim), invalid horizons or non-extendable time indices,
-    misordered future indices, and covariate structure mismatches.
+    misordered future indices, covariate structure mismatches, and a posterior
+    whose non-sample coordinates are missing, duplicated, or not identical in
+    labels and order to the model being replayed.
     """
 
 

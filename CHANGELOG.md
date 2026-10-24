@@ -8,6 +8,11 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- `predict_in_sample` and `forecast` raise `AlignmentError` when a posterior's
+  non-sample coordinates differ in labels or order from the model, instead of
+  replaying that posterior positionally and stamping the model's coordinates
+  on the result.
+
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the
   fixed height. `docs/_static/custom.css` sets `height: auto` on cell-output

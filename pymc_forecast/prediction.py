@@ -21,8 +21,8 @@ import numpy as np
 import pymc as pm
 import xarray as xr
 
-from pymc_forecast.data import DRAW_DIM, TIME_DIM, as_dataarray, null_covariates
-from pymc_forecast.exceptions import HorizonError
+from pymc_forecast.data import CHAIN_DIM, DRAW_DIM, TIME_DIM, as_dataarray, null_covariates
+from pymc_forecast.exceptions import AlignmentError, HorizonError
 from pymc_forecast.model import (
     EXPECTED_OBSERVATION_FORECAST_VAR,
     EXPECTED_OBSERVATION_VAR,
@@ -225,6 +225,43 @@ def _concat_draw_chunks(chunks: list):
     return type(template)(**groups)
 
 
+def _require_posterior_coords(posterior_ds: xr.Dataset, model: pm.Model) -> None:
+    """Reject a posterior whose non-sample coords differ from the model.
+
+    ``pm.sample_posterior_predictive`` replays values in storage order and the
+    result is stamped with the model's coordinates. A posterior whose
+    ``series`` (or covariate, or in-sample ``time``) labels are reordered,
+    renamed, duplicated, or missing would therefore be mislabeled. Sample dims
+    ``chain`` and ``draw`` are not model coordinates and are ignored. ``time``
+    is compared to the model's in-sample ``time``, never to ``time_future``.
+    """
+    sample_dims = {CHAIN_DIM, DRAW_DIM}
+    checked: set[str] = set()
+    for var in posterior_ds.data_vars.values():
+        for dim in var.dims:
+            if dim in sample_dims or dim in checked or dim not in model.coords:
+                continue
+            checked.add(dim)
+            expected = np.asarray(model.coords[dim])
+            if dim not in posterior_ds.coords:
+                msg = (
+                    f"posterior dim {dim!r} is missing coordinates; "
+                    f"the model labels it {expected.tolist()!r}"
+                )
+                raise AlignmentError(msg)
+            got = np.asarray(posterior_ds.coords[dim].values)
+            if got.size != len(set(got.tolist())):
+                msg = f"posterior '{dim}' coordinates must be unique, got {got.tolist()!r}"
+                raise AlignmentError(msg)
+            if got.shape != expected.shape or not np.array_equal(got, expected):
+                msg = (
+                    f"posterior '{dim}' coords must match the model "
+                    f"(same labels, same order): got {got.tolist()!r}, "
+                    f"expected {expected.tolist()!r}"
+                )
+                raise AlignmentError(msg)
+
+
 def _sample_predictive(
     posterior_ds: xr.Dataset,
     model: pm.Model,
@@ -248,6 +285,7 @@ def _sample_predictive(
     if batch_size is not None and batch_size < 1:
         msg = f"batch_size must be a positive integer, got {batch_size}"
         raise ValueError(msg)
+    _require_posterior_coords(posterior_ds, model)
     kwargs = dict(model=model, var_names=var_names, progressbar=progressbar)
     if predictions:
         kwargs["predictions"] = True
@@ -361,6 +399,11 @@ def forecast(
         model body does not register ``"obs"``.
     pymc_forecast.exceptions.AlignmentError
         If ``data`` or ``covariates`` cannot be normalized or do not align.
+        Also if a non-sample posterior coordinate (any dim other than
+        ``"chain"`` and ``"draw"``) is missing, duplicated, or not identical
+        in labels and order to the model's coordinate. ``"time"`` on the
+        posterior is the training window and must match the model's in-sample
+        ``"time"``, not ``"time_future"``. The posterior is not reindexed.
     ValueError
         If ``num_samples`` or ``batch_size`` is not positive.
     TypeError
@@ -446,6 +489,10 @@ def predict_in_sample(
     ------
     pymc_forecast.exceptions.AlignmentError
         If ``data`` or ``covariates`` cannot be normalized or do not align.
+        Also if a non-sample posterior coordinate (any dim other than
+        ``"chain"`` and ``"draw"``) is missing, duplicated, or not identical
+        in labels and order to the model's coordinate. The posterior is not
+        reindexed.
     pymc_forecast.exceptions.HorizonError
         If the model body does not register ``"obs"``.
     ValueError
