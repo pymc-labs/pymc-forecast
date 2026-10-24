@@ -443,6 +443,17 @@ class TestPosteriorCoordAlignment:
             with pytest.raises(AlignmentError, match="series"):
                 predict_in_sample(_level_panel, posterior, data, cov, random_seed=0)
 
+    def test_renamed_dimension_is_not_replayed_positionally(self):
+        data = _panel(["a", "b"], [10, 20, 30])
+        cov = xr.DataArray(
+            np.zeros((3, 0)), dims=("time", "covariate"), coords={"time": [10, 20, 30]}
+        )
+        # Dim name is not a model coordinate, so label comparison never runs.
+        # Storage order is b=10, a=1; stamping series=['a','b'] would return 10 for a.
+        posterior = _level_posterior(["b", "a"], [10.0, 1.0]).rename({"series": "group"})
+        with pytest.raises(AlignmentError, match="level"):
+            predict_in_sample(_level_panel, posterior, data, cov, random_seed=0)
+
     def test_matched_order_returns_labeled_value(self):
         data = _panel(["a", "b"], [10, 20, 30])
         cov = xr.DataArray(

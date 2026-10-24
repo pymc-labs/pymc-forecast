@@ -231,17 +231,38 @@ def _require_posterior_coords(posterior_ds: xr.Dataset, model: pm.Model) -> None
     ``pm.sample_posterior_predictive`` replays values in storage order and the
     result is stamped with the model's coordinates. A posterior whose
     ``series`` (or covariate, or in-sample ``time``) labels are reordered,
-    renamed, duplicated, or missing would therefore be mislabeled. Sample dims
-    ``chain`` and ``draw`` are not model coordinates and are ignored. ``time``
-    is compared to the model's in-sample ``time``, never to ``time_future``.
+    renamed, duplicated, or missing would therefore be mislabeled. A dimension
+    renamed so it is no longer a model coordinate is the same failure: the
+    values are frozen positionally and stamped with the model's labels. Sample
+    dims ``chain`` and ``draw`` are not model coordinates and are ignored.
+    ``time`` is compared to the model's in-sample ``time``, never to
+    ``time_future``.
     """
     sample_dims = {CHAIN_DIM, DRAW_DIM}
     checked: set[str] = set()
-    for var in posterior_ds.data_vars.values():
-        for dim in var.dims:
-            if dim in sample_dims or dim in checked or dim not in model.coords:
+    model_dims = model.named_vars_to_dims
+    for name, var in posterior_ds.data_vars.items():
+        if name not in model_dims:
+            continue
+        expected_dims = tuple(dim for dim in model_dims[name] if dim not in sample_dims)
+        got_dims = tuple(dim for dim in var.dims if dim not in sample_dims)
+        if set(got_dims) != set(expected_dims):
+            msg = (
+                f"posterior variable {name!r} dims {got_dims} must match the model "
+                f"dims {expected_dims}; a renamed or missing dimension is replayed "
+                "positionally and stamped with the model's coordinates"
+            )
+            raise AlignmentError(msg)
+        for dim in expected_dims:
+            if dim in checked:
                 continue
             checked.add(dim)
+            if dim not in model.coords:
+                msg = (
+                    f"posterior variable {name!r} dim {dim!r} has no model coordinate "
+                    "to check against"
+                )
+                raise AlignmentError(msg)
             expected = np.asarray(model.coords[dim])
             if dim not in posterior_ds.coords:
                 msg = (
@@ -403,7 +424,8 @@ def forecast(
         ``"chain"`` and ``"draw"``) is missing, duplicated, or not identical
         in labels and order to the model's coordinate. ``"time"`` on the
         posterior is the training window and must match the model's in-sample
-        ``"time"``, not ``"time_future"``. The posterior is not reindexed.
+        ``"time"``, not ``"time_future"``. A dimension whose name is not the
+        model's is rejected the same way. The posterior is not reindexed.
     ValueError
         If ``num_samples`` or ``batch_size`` is not positive.
     TypeError
@@ -491,7 +513,8 @@ def predict_in_sample(
         If ``data`` or ``covariates`` cannot be normalized or do not align.
         Also if a non-sample posterior coordinate (any dim other than
         ``"chain"`` and ``"draw"``) is missing, duplicated, or not identical
-        in labels and order to the model's coordinate. The posterior is not
+        in labels and order to the model's coordinate. A dimension whose name
+        is not the model's is rejected the same way. The posterior is not
         reindexed.
     pymc_forecast.exceptions.HorizonError
         If the model body does not register ``"obs"``.
