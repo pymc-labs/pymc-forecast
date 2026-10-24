@@ -1,0 +1,16 @@
+pymc_forecast/statespace.py
+  h_63db634213747e 363-371
+tests/test_statespace.py
+  h_63db634213747e 333-351
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "53004e324a6ba62aa54646b2185f4843607b55f6",
+  "prompts": {},
+  "humans": {
+    "h_63db634213747e": {
+      "author": "Benjamin T. Vincent <inferencelab@gmail.com>"
+    }
+  }
+}
