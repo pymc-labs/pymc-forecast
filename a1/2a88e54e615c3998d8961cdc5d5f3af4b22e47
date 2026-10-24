@@ -1,0 +1,16 @@
+pymc_forecast/prediction.py
+  h_63db634213747e 249,252-254
+tests/test_prediction.py
+  h_63db634213747e 457-479
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a12a88e54e615c3998d8961cdc5d5f3af4b22e47",
+  "prompts": {},
+  "humans": {
+    "h_63db634213747e": {
+      "author": "Benjamin T. Vincent <inferencelab@gmail.com>"
+    }
+  }
+}
