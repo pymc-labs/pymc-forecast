@@ -34,6 +34,7 @@ from pymc_forecast.data import (
     TIME_DIM,
     _validate_covariate_structure,
     as_dataarray,
+    as_time_index,
     concat_covariates,
     concat_time_index,
     extend_time_index,
@@ -359,7 +360,7 @@ class StatespaceForecaster(HMCForecaster):
         dim (squeezed away for univariate data)."""
         if "time" != time_dim:
             da = da.rename({"time": time_dim})
-        da = da.assign_coords({time_dim: np.asarray(time_coords)})
+        da = da.assign_coords({time_dim: as_time_index(time_coords)})
         series_dim = self._series_dim
         if OBSERVED_STATE_DIM in da.dims:
             if series_dim is None:
@@ -514,10 +515,10 @@ class StatespaceForecaster(HMCForecaster):
         t_obs = self._data.sizes[TIME_DIM]
         if horizon is not None:
             full_index = extend_time_index(self._data.get_index(TIME_DIM), horizon)
-            cov = null_covariates(np.asarray(full_index))
+            cov = null_covariates(full_index)
         elif future_index is not None:
-            full_index = concat_time_index(self._data[TIME_DIM].values, future_index)
-            cov = null_covariates(np.asarray(full_index))
+            full_index = concat_time_index(as_time_index(self._data), future_index)
+            cov = null_covariates(full_index)
         elif future_covariates is not None:
             cov = concat_covariates(self._covariates, future_covariates)
         else:
@@ -525,7 +526,7 @@ class StatespaceForecaster(HMCForecaster):
             _validate_covariate_structure(self._covariates, cov)
             validate_alignment(self._data, cov)
         future_covariates = cov.isel({TIME_DIM: slice(t_obs, None)})
-        future_coords = future_covariates[TIME_DIM].values
+        future_coords = as_time_index(future_covariates)
         if len(future_coords) == 0:
             msg = (
                 "no forecast horizon: pass covariates longer than the data "
@@ -620,7 +621,5 @@ class StatespaceForecaster(HMCForecaster):
                 progressbar=progressbar,
             )
         ds = _predictive_dataset(result)
-        obs = self._relabel(
-            ds["smoothed_posterior_observed"], TIME_DIM, self._data[TIME_DIM].values
-        )
+        obs = self._relabel(ds["smoothed_posterior_observed"], TIME_DIM, as_time_index(self._data))
         return xr.DataTree.from_dict({"posterior_predictive": xr.Dataset({"obs": obs})})

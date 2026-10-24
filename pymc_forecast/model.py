@@ -23,6 +23,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 import numpy as np
+import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
 import xarray as xr
@@ -39,6 +40,7 @@ from pymc_forecast.data import (
     FUTURE_DIM,
     TIME_DIM,
     as_dataarray,
+    as_time_index,
     validate_alignment,
 )
 from pymc_forecast.exceptions import HorizonError
@@ -128,17 +130,19 @@ class Horizon:
     data : xarray.DataArray or None
         Observed data, stored as given (time-first when built by
         :func:`build_model`), or ``None`` for prior-only builds.
-    time : numpy.ndarray
+    time : pandas.Index or numpy.ndarray
         Coordinate values of the in-sample window (length ``t_obs``); in
-        prior-only builds, the whole covariate span.
-    time_future : numpy.ndarray, optional
+        prior-only builds, the whole covariate span. A timezone-aware index
+        keeps its zone. ``from_data`` stores a ``pandas.Index``.
+    time_future : pandas.Index or numpy.ndarray, optional
         Coordinate values of the forecast horizon. Empty whenever there is no
-        horizon. Defaults to an empty array.
+        horizon. Defaults to an empty array. ``from_data`` stores a
+        ``pandas.Index`` slice, timezone included.
     """
 
     data: xr.DataArray | None
-    time: np.ndarray
-    time_future: np.ndarray = field(default_factory=lambda: np.empty(0))
+    time: np.ndarray | pd.Index
+    time_future: np.ndarray | pd.Index = field(default_factory=lambda: np.empty(0))
 
     @property
     def t_obs(self) -> int:
@@ -185,7 +189,7 @@ class Horizon:
             If ``data`` is given and is not aligned with ``covariates``
             (see :func:`~pymc_forecast.data.validate_alignment`).
         """
-        cov_time = np.asarray(covariates[TIME_DIM].values)
+        cov_time = as_time_index(covariates)
         if data is None:
             return cls(data=None, time=cov_time)
         validate_alignment(data, covariates)

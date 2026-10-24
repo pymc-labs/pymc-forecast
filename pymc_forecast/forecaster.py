@@ -18,6 +18,7 @@ from pymc_forecast.data import (
     TIME_DIM,
     _validate_covariate_structure,
     as_dataarray,
+    as_time_index,
     concat_covariates,
     concat_time_index,
     extend_time_index,
@@ -401,7 +402,7 @@ class BaseForecaster(abc.ABC):
             if horizon is not None:
                 full_index = extend_time_index(self._data.get_index(TIME_DIM), horizon)
             else:
-                full_index = concat_time_index(self._data[TIME_DIM].values, future_index)
+                full_index = concat_time_index(as_time_index(self._data), future_index)
             covariates = null_covariates(full_index)
         elif future_covariates is not None:
             covariates = concat_covariates(self._covariates, future_covariates)

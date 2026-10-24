@@ -23,7 +23,7 @@ import numpy as np
 import pymc as pm
 import xarray as xr
 
-from pymc_forecast.data import TIME_DIM, as_dataarray, null_covariates
+from pymc_forecast.data import TIME_DIM, as_dataarray, as_time_index, null_covariates
 from pymc_forecast.exceptions import HorizonError, MethodResolutionError, OptionalDependencyError
 from pymc_forecast.model import FORECAST_VAR, build_model
 from pymc_forecast.prediction import posterior_dataset, thin_draws
@@ -159,7 +159,7 @@ def _training_inputs(data, covariates) -> tuple[xr.DataArray, xr.DataArray]:
     """
     data_da = as_dataarray(data, role="data")
     if covariates is None:
-        return data_da, null_covariates(data_da[TIME_DIM].values)
+        return data_da, null_covariates(as_time_index(data_da))
     cov_da = as_dataarray(covariates, role="covariates")
     return data_da, cov_da.isel({TIME_DIM: slice(None, data_da.sizes[TIME_DIM])})
 

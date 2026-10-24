@@ -2,6 +2,7 @@ import inspect
 import warnings
 
 import numpy as np
+import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
 import pytest
@@ -22,7 +23,7 @@ from pymc_forecast.forecaster import (
     HMCForecaster,
     PathfinderForecaster,
 )
-from pymc_forecast.model import Horizon, predict
+from pymc_forecast.model import ForecastingModel, Horizon, predict
 
 SEED = 4242
 
@@ -577,3 +578,40 @@ class TestPathfinderForecaster:
         np.testing.assert_allclose(
             pred["forecast"].mean(("chain", "draw")).values, truth, atol=0.35
         )
+
+
+class _Level(ForecastingModel):
+    def model(self, covariates, data=None):
+        h = Horizon.from_data(covariates, data)
+        predict(
+            h,
+            lambda loc: pm.Normal.dist(loc, 1.0),
+            pm.Normal("level", 0.0, 1.0) * pt.ones(h.duration),
+        )
+
+
+class TestSingleZoneTimeIndex:
+    def test_predict_in_sample_keeps_local_clock(self):
+        local = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="America/Los_Angeles")
+        data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": local})
+        fc = Forecaster(_Level(), data, num_steps=5, progressbar=False)
+        assert pd.DatetimeIndex(fc.model.coords["time"]).equals(local)
+        samples = fc.predict_in_sample(num_samples=1, random_seed=0)
+        observed = samples["posterior_predictive"]["mu"].get_index("time")
+        assert pd.DatetimeIndex(list(observed)).equals(local)
+
+    def test_future_index_keeps_utc(self):
+        train = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
+        future = pd.date_range("2024-01-04", periods=2, freq="D", tz="UTC")
+        data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": train})
+        fc = Forecaster(_Level(), data, num_steps=5, progressbar=False)
+        result = fc.forecast(future_index=future, num_samples=1, random_seed=0)
+        assert result["predictions"]["forecast"].get_index("time_future").equals(future)
+
+    def test_horizon_extends_utc(self):
+        train = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
+        data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": train})
+        fc = Forecaster(_Level(), data, num_steps=5, progressbar=False)
+        result = fc.forecast(horizon=2, num_samples=1, random_seed=0)
+        expected = pd.date_range("2024-01-04", periods=2, freq="D", tz="UTC")
+        assert result["predictions"]["forecast"].get_index("time_future").equals(expected)

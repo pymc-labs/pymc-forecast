@@ -319,3 +319,14 @@ class TestOptionalDependency:
         monkeypatch.setitem(sys.modules, "pymc_extras.statespace", None)
         with pytest.raises(OptionalDependencyError, match="pymc-extras"):
             StatespaceForecaster(LocalLevelStatespace(), data)
+
+
+def test_relabel_keeps_single_zone_index():
+    index = pd.date_range("2024-03-01", periods=3, freq="D", tz="UTC")
+    data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": index})
+    forecaster = StatespaceForecaster(LocalLevelStatespace())
+    forecaster._data = data
+    raw = xr.DataArray(np.ones((1, 1, 3)), dims=("chain", "draw", "time"))
+    labeled = forecaster._relabel(raw, "time", index)
+    assert labeled.get_index("time").equals(index)
+    assert labeled.get_index("time").tz == index.tz

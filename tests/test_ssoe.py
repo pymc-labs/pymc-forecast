@@ -1,6 +1,7 @@
 """Analytical recursion, posterior replay and labeled-input checks for SSOE."""
 
 import numpy as np
+import pandas as pd
 import pymc as pm
 import pytensor
 import pytensor.tensor as pt
@@ -436,3 +437,17 @@ def test_per_series_scale_dist_noise_broadcasts_over_series():
     point = np.ones((3, 2))
     expected = pm.logp(pm.Normal.dist(0.0, sigma), point).sum().eval()
     np.testing.assert_allclose(model.compile_logp()({"eps_future": point}), expected)
+
+
+def test_tz_aware_horizon_keeps_zone_through_ssoe():
+    index = pd.date_range("2020-06-01 22:00", periods=3, freq="h", tz="Europe/Berlin")
+    future = pd.date_range(
+        index[-1] + pd.Timedelta(hours=1), periods=2, freq="h", tz="Europe/Berlin"
+    )
+    data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": index})
+    covariates = null_covariates(index.append(future))
+    model = build_model(arma, data, covariates)
+    assert pd.DatetimeIndex(model.coords["time"]).tz == index.tz
+    assert list(pd.DatetimeIndex(model.coords["time"])) == list(index)
+    draws = forecast(arma, fixed_posterior(2), data, covariates, random_seed=1).predictions
+    assert pd.DatetimeIndex(draws.time_future.values).equals(future)

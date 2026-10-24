@@ -18,7 +18,7 @@ from typing import Any, Literal
 import numpy as np
 import xarray as xr
 
-from pymc_forecast.data import FUTURE_DIM, TIME_DIM, as_dataarray, null_covariates
+from pymc_forecast.data import FUTURE_DIM, TIME_DIM, as_dataarray, as_time_index, null_covariates
 from pymc_forecast.exceptions import BacktestWindowError
 from pymc_forecast.forecaster import Forecaster
 from pymc_forecast.metrics import DEFAULT_METRICS, Metric, evaluate_forecast
@@ -250,7 +250,7 @@ def backtest(
     """
     data_da = as_dataarray(data, role="data")
     if covariates is None:
-        cov_da = null_covariates(data_da[TIME_DIM].values)
+        cov_da = null_covariates(as_time_index(data_da))
     else:
         cov_da = as_dataarray(covariates, role="covariates")
     duration = data_da.sizes[TIME_DIM]
