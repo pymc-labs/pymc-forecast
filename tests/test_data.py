@@ -5,6 +5,7 @@ import xarray as xr
 
 from pymc_forecast.data import (
     as_dataarray,
+    as_time_index,
     concat_covariates,
     concat_time_index,
     extend_time_index,
@@ -256,3 +257,57 @@ class TestConcatCovariates:
         )
         with pytest.raises(AlignmentError, match="one side is unlabeled"):
             concat_covariates(self._train_cov(), unlabeled)
+
+
+def _zone(index):
+    """Timezone of an index, including an object index of aware timestamps."""
+    if getattr(index, "tz", None) is not None:
+        return index.tz
+    stamps = [pd.Timestamp(value) for value in index]
+    zones = {stamp.tz for stamp in stamps}
+    assert len(zones) == 1
+    return zones.pop()
+
+
+class TestTimezonePreserved:
+    @pytest.mark.parametrize("tz", ["America/Los_Angeles", "UTC", "Europe/Berlin"])
+    def test_helpers_keep_zone_and_clock(self, tz):
+        train = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz=tz)
+        future = pd.date_range(train[-1] + pd.Timedelta(hours=1), periods=2, freq="h", tz=tz)
+        da = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": train})
+
+        assert as_time_index(da).equals(train)
+        assert as_time_index(train).equals(train)
+        assert null_covariates(train).get_index("time").equals(train)
+        assert extend_time_index(train, 2).equals(train.append(future))
+        assert concat_time_index(train, future).equals(train.append(future))
+        extended = null_covariates(train.append(future))
+        validate_alignment(da, extended)
+        assert _zone(extended.get_index("time")) == train.tz
+
+    def test_naive_and_aware_stay_incomparable(self):
+        naive = pd.date_range("2024-01-01", periods=3, freq="D")
+        aware = pd.date_range("2024-01-04", periods=2, freq="D", tz="UTC")
+        with pytest.raises(AlignmentError, match="not comparable"):
+            concat_time_index(naive, aware)
+        data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": naive})
+        cov = null_covariates(naive.append(pd.date_range("2024-01-04", periods=2, freq="D")))
+        # A timezone-aware prefix of the same clock must not compare equal.
+        aware_prefix = null_covariates(pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC"))
+        with pytest.raises(AlignmentError, match="misaligned"):
+            validate_alignment(data, aware_prefix)
+        validate_alignment(data, cov)
+
+    def test_mixed_zones_rejected(self):
+        train = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="Asia/Kolkata")
+        future = pd.date_range("2020-01-11 02:00", periods=2, freq="h", tz="America/New_York")
+        with pytest.raises(AlignmentError, match="timezone"):
+            concat_time_index(train, future)
+        mixed = pd.Index(
+            [
+                pd.Timestamp("2020-01-11 02:00", tz="Pacific/Chatham"),
+                pd.Timestamp("2020-01-11 03:00", tz="Pacific/Auckland"),
+            ]
+        )
+        with pytest.raises(AlignmentError, match="mixes timezones"):
+            concat_time_index(train, mixed)

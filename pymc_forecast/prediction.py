@@ -21,7 +21,7 @@ import numpy as np
 import pymc as pm
 import xarray as xr
 
-from pymc_forecast.data import DRAW_DIM, TIME_DIM, as_dataarray, null_covariates
+from pymc_forecast.data import DRAW_DIM, TIME_DIM, as_dataarray, as_time_index, null_covariates
 from pymc_forecast.exceptions import HorizonError
 from pymc_forecast.model import (
     EXPECTED_OBSERVATION_FORECAST_VAR,
@@ -455,7 +455,7 @@ def predict_in_sample(
     """
     data_da = as_dataarray(data, role="data")
     if covariates is None:
-        cov_da = null_covariates(data_da[TIME_DIM].values)
+        cov_da = null_covariates(as_time_index(data_da))
     else:
         cov_da = as_dataarray(covariates, role="covariates")
         cov_da = cov_da.isel({TIME_DIM: slice(None, data_da.sizes[TIME_DIM])})

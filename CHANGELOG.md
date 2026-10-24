@@ -8,6 +8,13 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- Keep a single-zone time index's timezone and clock. Time helpers, model
+  coords, and forecast outputs no longer rebuild a timezone-aware
+  ``DatetimeIndex`` through ``np.asarray`` or ``.values``, which shifted the
+  clock to naive UTC and made later comparisons raise ``AlignmentError``.
+  Two aware indexes with different zones raise ``AlignmentError`` instead of
+  becoming an object index. Statespace ``forecast`` stamps ``time_future``
+  without treating the training index name ``"time"`` as that dimension.
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the
   fixed height. `docs/_static/custom.css` sets `height: auto` on cell-output

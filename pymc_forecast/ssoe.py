@@ -20,7 +20,7 @@ from pytensor.raise_op import Assert
 from pytensor.tensor.random.basic import NormalRV, StudentTRV
 
 from pymc_forecast._dist import check_unnamed_dist, expand_dist, is_dist, is_zero_constant
-from pymc_forecast.data import FUTURE_DIM, TIME_DIM
+from pymc_forecast.data import FUTURE_DIM, TIME_DIM, as_time_index
 from pymc_forecast.exceptions import AlignmentError, HorizonError
 from pymc_forecast.model import Horizon
 from pymc_forecast.priors import is_prior_like, prior_rv_factory
@@ -70,7 +70,7 @@ def _history(h: Horizon, y: xr.DataArray | None, dims: tuple[str, ...] | None):
         raise HorizonError("ssoe requires a nonempty observed history")
     if not isinstance(y, xr.DataArray) or TIME_DIM not in y.dims:
         raise AlignmentError("ssoe y must be a DataArray with a 'time' dimension")
-    if not np.array_equal(y[TIME_DIM].values, h.time):
+    if not as_time_index(y).equals(as_time_index(h.time)):
         raise AlignmentError("ssoe y coordinates must match the observed time window exactly")
     inferred = tuple(d for d in y.dims if d != TIME_DIM)
     dims = inferred if dims is None else tuple(dims)
@@ -95,10 +95,10 @@ def _inputs(h: Horizon, xs: xr.DataArray | None):
         return None
     if not isinstance(xs, xr.DataArray) or TIME_DIM not in xs.dims:
         raise AlignmentError("ssoe xs must be a DataArray with a 'time' dimension")
-    time = np.concatenate([h.time, h.time_future]) if h.future else h.time
-    if xs.sizes[TIME_DIM] < h.duration or not np.array_equal(
-        xs[TIME_DIM].values[: h.duration], time
-    ):
+    time = as_time_index(h.time)
+    if h.future:
+        time = time.append(as_time_index(h.time_future))
+    if xs.sizes[TIME_DIM] < h.duration or not as_time_index(xs)[: h.duration].equals(time):
         raise AlignmentError("ssoe xs must cover the horizon with matching time coordinates")
     for dim in xs.dims:
         if dim == TIME_DIM:
