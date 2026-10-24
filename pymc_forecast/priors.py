@@ -22,8 +22,10 @@ On model objects, :class:`PriorConfig` turns those specifications into a
 named, overridable configuration: subclasses declare ``default_priors`` and
 callers replace any subset with ``priors={...}`` at construction time.
 
-pymc-extras is never imported here — ``Prior`` objects are recognized
-structurally — so the core package keeps that dependency optional.
+pymc-extras is not imported at module import — ``Prior`` objects are recognized
+structurally — so the core package keeps that dependency optional. The
+observation factory imports ``handle_dims`` only when it aligns a shared
+hyper-prior to the likelihood dims.
 """
 
 from collections.abc import Mapping
@@ -137,12 +139,31 @@ class PriorConfig:
         raise TypeError(msg)
 
 
+class _SharedHyperprior:
+    """A nested prior already created once, re-aligned on each segment.
+
+    ``Prior._create_parameter`` name-aligns only values that still expose
+    ``create_variable``. Replacing the nested prior with the raw tensor makes
+    the outer variable trailing-broadcast it, so a vector dimmed on ``"a"``
+    lands on the last outer dim. Keeping the tensor and its dims lets each
+    segment's ``dim_handler`` place the same RV.
+    """
+
+    def __init__(self, value, dims):
+        self.value = value
+        self.dims = dims
+
+    def create_variable(self, name: str, xdist: bool = False):
+        return self.value
+
+
 def _materialize_hyperpriors(prior, base_name: str):
     """Create nested ``Prior`` parameters once, as ``{base_name}_{param}`` variables.
 
     Returns a copy of ``prior`` whose ``Prior``-valued parameters are replaced
-    by model variables, so every segment built from the copy shares them. Must
-    run inside a model context.
+    by :class:`_SharedHyperprior` wrappers around those variables, so every
+    segment built from the copy shares them and name-aligns them to its own
+    dims. Must run inside a model context.
     """
     materialized = prior.deepcopy()
     for key, value in list(materialized.parameters.items()):
@@ -156,7 +177,10 @@ def _materialize_hyperpriors(prior, base_name: str):
                 "train/forecast split; use a callable factory instead of a Prior"
             )
             raise HorizonError(msg)
-        materialized.parameters[key] = value.create_variable(f"{base_name}_{key}")
+        materialized.parameters[key] = _SharedHyperprior(
+            value.create_variable(f"{base_name}_{key}"),
+            value.dims,
+        )
     return materialized
 
 
@@ -250,8 +274,20 @@ def prior_obs_factory(prior, base_name: str):
         if "materialized" not in state:
             state["materialized"] = _materialize_hyperpriors(prior, base_name)
         segment = state["materialized"]
+        # Not create_variable: a wrapper must not be splatted into the
+        # distribution. Align here with the same function the RV path uses.
+        from pymc_extras.prior import handle_dims
+
+        parameters = {
+            key: (
+                handle_dims(value.value, value.dims or (), tuple(dims))
+                if isinstance(value, _SharedHyperprior)
+                else value
+            )
+            for key, value in segment.parameters.items()
+        }
         return segment.pymc_distribution(
-            name, mu=latent, observed=observed, dims=tuple(dims), **segment.parameters
+            name, mu=latent, observed=observed, dims=tuple(dims), **parameters
         )
 
     return obs_fn
