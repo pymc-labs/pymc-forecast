@@ -25,6 +25,26 @@ class TestFourierFeatures:
         with pytest.raises(ValueError, match="num_terms"):
             fourier_features(10, period=7, num_terms=0)
 
+    @pytest.mark.parametrize(
+        "time",
+        [np.int64(10), np.float64(10.0), 10.0, np.array(10.0)],
+    )
+    def test_scalar_positions_are_one_phase(self, time):
+        expected = fourier_features(np.array([10.0]), period=7, num_terms=1)
+        feats = fourier_features(time, period=7, num_terms=1)
+        assert feats.shape == (1, 2)
+        np.testing.assert_allclose(feats.values, expected.values)
+        np.testing.assert_array_equal(feats["time"].values, expected["time"].values)
+
+    def test_python_int_is_still_a_duration(self):
+        feats = fourier_features(10, period=7, num_terms=1)
+        assert feats.shape == (10, 2)
+        np.testing.assert_array_equal(feats["time"].values, np.arange(10))
+
+    def test_rank2_positions_are_not_raveled(self):
+        with pytest.raises(ValueError):
+            fourier_features(np.ones((2, 3)), period=7, num_terms=1)
+
 
 class TestPeriodicRepeat:
     def test_numpy_tiling(self):

@@ -8,6 +8,9 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- Fix ``fourier_features`` on NumPy and Python scalar phases: a 0-d position
+  such as ``np.int64(10)`` or ``10.0`` is one phase, not an indexing error.
+  A built-in ``int`` is still a duration.
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the
   fixed height. `docs/_static/custom.css` sets `height: auto` on cell-output
