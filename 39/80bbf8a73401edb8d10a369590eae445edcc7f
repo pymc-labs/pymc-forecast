@@ -1,0 +1,38 @@
+CHANGELOG.md
+  h_63db634213747e 11-14
+pymc_forecast/data.py
+  h_63db634213747e 26,133-171,191,235,299-300,359,428-430,438
+pymc_forecast/evaluate.py
+  h_63db634213747e 21,253
+pymc_forecast/fit.py
+  h_63db634213747e 26,162
+pymc_forecast/forecaster.py
+  h_63db634213747e 21,405
+pymc_forecast/model.py
+  h_63db634213747e 26,43,133,135-137,139-140,144-145,192
+pymc_forecast/prediction.py
+  h_63db634213747e 24,458
+pymc_forecast/ssoe.py
+  h_63db634213747e 23,73,98-101
+pymc_forecast/statespace.py
+  h_63db634213747e 37,363,518,520-521,529,624
+tests/test_data.py
+  h_63db634213747e 8,260-299
+tests/test_forecaster.py
+  h_63db634213747e 5,26,581-617
+tests/test_ssoe.py
+  h_63db634213747e 4,440-453
+tests/test_statespace.py
+  h_63db634213747e 322-332
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "3980bbf8a73401edb8d10a369590eae445edcc7f",
+  "prompts": {},
+  "humans": {
+    "h_63db634213747e": {
+      "author": "Benjamin T. Vincent <inferencelab@gmail.com>"
+    }
+  }
+}
