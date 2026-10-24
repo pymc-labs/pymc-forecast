@@ -7,6 +7,9 @@ The dim/coord/group/variable names on prediction outputs (documented in
 breaking change, made only in a minor release and called out here.
 
 ## Unreleased
+- ``predict`` left-aligns a length-``duration`` latent across batch dims. A
+  1-d time effect on a square panel is no longer broadcast as a series effect,
+  so both ``mu`` and the observation log-probability follow the time axis.
 
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the
