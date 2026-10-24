@@ -45,6 +45,26 @@ TIME_DIM = "time"
 FUTURE_DIM = "time_future"
 """Dim name of the forecast-horizon time dimension."""
 
+
+def _drop_axis_name(index):
+    """Return ``index`` with a scalar axis name cleared.
+
+    xarray treats ``Index.name`` as the coordinate dimension. A named pandas
+    axis would then either fail validation (``set_index("date")``) or, on a
+    square frame, bind the other axis's labels. MultiIndex level names are
+    not a single ``.name``, and ``MultiIndex.rename(None)`` raises, so those
+    indexes are returned unchanged. An unnamed index is returned as-is so
+    timezone and frequency objects are not copied away.
+    """
+    import pandas as pd
+
+    if isinstance(index, pd.MultiIndex) or index.name is None:
+        return index
+    renamed = index.copy()
+    renamed.name = None
+    return renamed
+
+
 _DEFAULT_SECOND_DIM: dict[str, str] = {"data": "series", "covariates": "covariate"}
 
 Role = Literal["data", "covariates"]
@@ -56,8 +76,9 @@ def as_dataarray(obj, *, role: Role = "data") -> xr.DataArray:
     Accepted inputs:
 
     - ``xarray.DataArray`` with a ``"time"`` dim (transposed time-first);
-    - ``pandas.Series`` (index becomes the time coord) or ``pandas.DataFrame``
-      (index → time coord, columns → ``"series"``/``"covariate"`` coord);
+    - ``pandas.Series`` (index becomes the time coord; a scalar index name is
+      ignored) or ``pandas.DataFrame`` (index → time coord, columns →
+      ``"series"``/``"covariate"`` coord; scalar axis names are ignored);
     - 1-d/2-d array-likes converted with ``np.asarray`` (integer-range time
       coord is attached).
 
@@ -97,13 +118,19 @@ def as_dataarray(obj, *, role: Role = "data") -> xr.DataArray:
 
         if isinstance(obj, pd.Series):
             da = xr.DataArray(
-                obj.to_numpy(), dims=(TIME_DIM,), coords={TIME_DIM: obj.index}, name=obj.name
+                obj.to_numpy(),
+                dims=(TIME_DIM,),
+                coords={TIME_DIM: _drop_axis_name(obj.index)},
+                name=obj.name,
             )
         elif isinstance(obj, pd.DataFrame):
             da = xr.DataArray(
                 obj.to_numpy(),
                 dims=(TIME_DIM, second),
-                coords={TIME_DIM: obj.index, second: obj.columns},
+                coords={
+                    TIME_DIM: _drop_axis_name(obj.index),
+                    second: _drop_axis_name(obj.columns),
+                },
             )
         else:
             arr = np.asarray(obj)
