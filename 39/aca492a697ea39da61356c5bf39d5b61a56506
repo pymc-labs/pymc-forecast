@@ -1,0 +1,22 @@
+CHANGELOG.md
+  h_63db634213747e 11-15
+pymc_forecast/exceptions.py
+  h_63db634213747e 45-47
+pymc_forecast/forecaster.py
+  h_63db634213747e 380-384,483-487
+pymc_forecast/prediction.py
+  h_63db634213747e 24-25,228-264,288,402-406,492-495
+tests/test_prediction.py
+  h_63db634213747e 9-10,370-486
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "39aca492a697ea39da61356c5bf39d5b61a56506",
+  "prompts": {},
+  "humans": {
+    "h_63db634213747e": {
+      "author": "Benjamin T. Vincent <inferencelab@gmail.com>"
+    }
+  }
+}
