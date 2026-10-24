@@ -360,7 +360,15 @@ class StatespaceForecaster(HMCForecaster):
         dim (squeezed away for univariate data)."""
         if "time" != time_dim:
             da = da.rename({"time": time_dim})
-        da = da.assign_coords({time_dim: as_time_index(time_coords)})
+        coords = as_time_index(time_coords)
+        # ``get_index("time")`` is named ``"time"``. Assigning that index onto
+        # ``"time_future"`` makes xarray treat the name as the dimension.
+        # Clear a mismatched name; do not rebuild via ``np.asarray`` (that drops
+        # the timezone and shifts the clock).
+        if coords.name not in (None, time_dim):
+            coords = coords.copy()
+            coords.name = None
+        da = da.assign_coords({time_dim: coords})
         series_dim = self._series_dim
         if OBSERVED_STATE_DIM in da.dims:
             if series_dim is None:
