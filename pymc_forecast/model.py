@@ -419,6 +419,19 @@ def _call_one_argument(obs, segment) -> pt.TensorVariable:
     return dist
 
 
+def _left_align_time(value: pt.TensorVariable, n_batch: int) -> pt.TensorVariable:
+    """Insert broadcast axes after time so a 1-d latent is not right-aligned.
+
+    ``broadcast_to`` aligns shapes from the right. A length-``duration`` vector
+    would otherwise become constant in time and vary across the last batch dim.
+    Already time-major tensors, univariate vectors (``n_batch == 0``), and
+    scalars are returned unchanged.
+    """
+    if value.ndim == 1 and n_batch > 0:
+        return value.dimshuffle(0, *("x",) * n_batch)
+    return value
+
+
 def _emit_observation(obs, name: str, segment, dims: tuple[str, ...], observed):
     """Dispatch one observation segment. The 4-argument factory path is unchanged."""
     if callable(obs) and _is_observation_factory(obs):
@@ -489,7 +502,8 @@ def predict(
           location is replaced by the segment latent.
     latent : pytensor.tensor.TensorVariable
         Full-horizon predictor with time on axis 0; its length along axis 0
-        must be ``h.duration``.
+        must be ``h.duration``. A 1-d latent is a time effect and is left-aligned
+        across batch dims.
     expected_observation : pytensor.tensor.TensorVariable, optional
         Full-horizon conditional expected observation in observed outcome
         units, with time on axis 0. For a Poisson log-link model whose
@@ -538,12 +552,18 @@ def predict(
     # Broadcast the recorded predictors over the full panel before slicing.
     # Broadcasting an already-sliced singleton panel axis can be rewritten
     # incorrectly by PyTensor 3.3, producing a shape error for mu_future.
+    # A length-duration vector is a time effect: pad batch axes on the right
+    # so broadcast_to does not right-align it into a series effect.
     shape = (h.duration, *(model.dim_lengths[d] for d in dims))
-    latent_output = pt.broadcast_to(latent, shape)
+    latent_panel = _left_align_time(latent, len(dims))
+    latent_output = pt.broadcast_to(latent_panel, shape)
     expected_output = (
-        None if expected_observation is None else pt.broadcast_to(expected_observation, shape)
+        None
+        if expected_observation is None
+        else pt.broadcast_to(_left_align_time(expected_observation, len(dims)), shape)
     )
-    _emit_observation(obs, OBS_VAR, latent[: h.t_obs], (TIME_DIM, *dims), observed)
+    observed_latent = latent_output if latent.ndim == 1 and len(dims) > 0 else latent
+    _emit_observation(obs, OBS_VAR, observed_latent[: h.t_obs], (TIME_DIM, *dims), observed)
     pm.Deterministic(MU_VAR, latent_output[: h.t_obs], dims=(TIME_DIM, *dims))
     if expected_output is not None:
         pm.Deterministic(
@@ -552,7 +572,7 @@ def predict(
             dims=(TIME_DIM, *dims),
         )
     if h.future > 0:
-        _emit_observation(obs, FORECAST_VAR, latent[h.t_obs :], (FUTURE_DIM, *dims), None)
+        _emit_observation(obs, FORECAST_VAR, observed_latent[h.t_obs :], (FUTURE_DIM, *dims), None)
         pm.Deterministic(MU_FORECAST_VAR, latent_output[h.t_obs :], dims=(FUTURE_DIM, *dims))
         if expected_output is not None:
             pm.Deterministic(
