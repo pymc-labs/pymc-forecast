@@ -56,6 +56,9 @@ notebooks = [
     "ipykernel",
     "nbconvert",
     "impulso>=0.1.3",
+    "cvxpy",
+    "graphviz",
+    "preliz",
 ]
 
 [tool.uv]

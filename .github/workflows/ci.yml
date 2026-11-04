@@ -98,6 +98,8 @@ jobs:
           path: ~/.cache/pymc_forecast
           key: pymc-forecast-data-v2
       - run: uv sync --all-extras --group notebooks
+      # pm.model_to_graphviz in the inventory planning example needs the dot binary.
+      - run: sudo apt-get install -y graphviz
       - name: Execute example notebooks (reduced settings)
         env:
           PYMC_FORECAST_SMOKE_TEST: "1"
