@@ -8,6 +8,10 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- Docs: add the from-forecasts-to-decisions example, inventory planning on posterior
+  predictive demand scenarios with the simulator and the projected gradient solver written
+  in PyTensor; the `notebooks` dependency group gains `cvxpy`, `graphviz` and `preliz`, and
+  the notebooks CI job installs the `graphviz` binary.
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the
   fixed height. `docs/_static/custom.css` sets `height: auto` on cell-output

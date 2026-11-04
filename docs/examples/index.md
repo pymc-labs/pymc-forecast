@@ -36,6 +36,11 @@ Executed end-to-end and re-run in CI with reduced sampling settings.
   reconciliation of a Walmart hierarchy: official-weight check on the full panel, then
   the three starter-kit models fit, inspected, backtested with `backtest`, and scored with
   the competition's weighted scaled CRPS on an 84-series panel with all 12 levels.
+- [From forecasts to decisions](forecast_to_decision.ipynb) — inventory planning on a
+  synthetic daily demand series: posterior predictive draws as demand scenarios, an
+  inventory simulator and a projected gradient solver written in PyTensor, chance-constrained,
+  expected cost and CVaR order plans scored out of sample, and a cvxpy linear program as a
+  cross check of the solver.
 
 ```{toctree}
 :hidden:
@@ -53,4 +58,5 @@ exponential_smoothing_state_space
 scan_vs_statespace_local_level
 retail_stockouts
 m5_forecasting
+forecast_to_decision
 ```
