@@ -8,6 +8,13 @@ breaking change, made only in a minor release and called out here.
 
 ## Unreleased
 
+- Nested ``Prior`` parameters are name-aligned to each segment's dims. A
+  hyper-prior dimmed on ``"a"`` no longer trailing-broadcasts onto the last
+  dim of ``("time", "a", "b")`` or of the forecast segment, and the same RV
+  is shared. Observation likelihoods use the same alignment. A
+  ``centered=False`` nested prior is included: it name-aligns instead of
+  raising when the parameter is not a raw tensor.
+
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the
   fixed height. `docs/_static/custom.css` sets `height: auto` on cell-output
