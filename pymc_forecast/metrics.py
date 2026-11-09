@@ -378,14 +378,15 @@ def make_mase(train_data, *, seasonality: int = 1) -> Metric:
         A metric ``mase(pred, truth) -> float`` equal to
         :func:`eval_mae` divided by the training scale; it accepts the same
         ``pred``/``truth`` inputs and raises the same errors as
-        :func:`eval_mae`.
+        :func:`eval_mae`. The scale is exposed as ``mase.scale``.
 
     Raises
     ------
     ValueError
         If ``seasonality < 1``, ``train_data`` is not longer than
         ``seasonality`` along time, or the seasonal-naive scale is zero
-        (constant training series).
+        (constant training series) or not finite (NaN or infinity in
+        ``train_data``).
     """
     if seasonality < 1:
         msg = f"seasonality must be >= 1, got {seasonality}"
@@ -404,6 +405,12 @@ def make_mase(train_data, *, seasonality: int = 1) -> Metric:
     # matching crps_empirical. copy=False leaves float64 input bitwise unchanged.
     lagged = train_data.astype(np.float64, copy=False)
     scale = float(np.abs(lagged[seasonality:] - lagged[:-seasonality]).mean())
+    if not np.isfinite(scale):
+        msg = (
+            "seasonal-naive scale is not finite (NaN or inf in train_data); MASE is "
+            "undefined. Fill or drop missing training values first."
+        )
+        raise ValueError(msg)
     if scale == 0.0:
         msg = (
             "seasonal-naive scale is zero (constant training series); MASE is "
@@ -414,6 +421,7 @@ def make_mase(train_data, *, seasonality: int = 1) -> Metric:
     def mase(pred, truth) -> float:
         return eval_mae(pred, truth) / scale
 
+    mase.scale = scale
     return mase
 
 

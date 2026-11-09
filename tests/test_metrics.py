@@ -153,6 +153,20 @@ class TestMase:
         with pytest.raises(ValueError, match="longer than seasonality"):
             make_mase(np.arange(3, dtype=np.uint8), seasonality=3)
 
+    @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
+    def test_non_finite_training_value_rejected(self, bad):
+        with pytest.raises(ValueError, match="not finite"):
+            make_mase(np.array([1.0, bad, 3.0, 4.0]))
+
+    def test_metric_divides_mae_by_exposed_scale(self):
+        metric = make_mase(np.array([1.0, 2.0, 4.0, 8.0]))
+        pred, truth = np.zeros((2, 1)), np.ones(1)
+        assert metric.scale == pytest.approx(7.0 / 3)
+        assert metric(pred, truth) == eval_mae(pred, truth) / metric.scale
+
+    def test_bool_training_series_gives_a_scale(self):
+        assert _mase_scale(np.array([True, False, True, True]), 1) == pytest.approx(2.0 / 3)
+
     def test_float64_scale_is_bitwise_identical(self):
         train = np.array([0.1, 0.2, 0.4, 1.0 / 3, np.pi, -1e-16], dtype=np.float64)
         expected = float(np.abs(train[1:] - train[:-1]).mean())
@@ -173,11 +187,8 @@ class TestMase:
 
 
 def _mase_scale(train, seasonality: int) -> float:
-    """Recover the closed-over seasonal-naive scale from a unit MAE."""
-    metric = make_mase(train, seasonality=seasonality)
-    pred = np.zeros((2, 1))
-    truth = np.ones(1)
-    return eval_mae(pred, truth) / metric(pred, truth)
+    """Read the seasonal-naive scale the factory computed (no round trip)."""
+    return make_mase(train, seasonality=seasonality).scale
 
 
 class TestLabeledInputs:

@@ -10,7 +10,10 @@ breaking change, made only in a minor release and called out here.
 
 - `make_mase` accumulates the seasonal-naive scale in float64. Integer and
   low-precision training series no longer wrap into a negative or hugely
-  inflated scale.
+  inflated scale. A boolean training series now yields a scale instead of a
+  ``TypeError``. A NaN or infinity in ``train_data`` now raises ``ValueError``
+  instead of returning NaN for every score, and the factory exposes the scale
+  as ``mase.scale``.
 
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the
