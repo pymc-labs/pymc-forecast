@@ -427,6 +427,22 @@ def _call_one_argument(obs, segment) -> pt.TensorVariable:
     return dist
 
 
+def _left_align_time(value: pt.TensorVariable, n_batch: int) -> pt.TensorVariable:
+    """Pad broadcast axes on the right so a time-major tensor is not right-aligned.
+
+    ``broadcast_to`` aligns shapes from the right. A time-major tensor with
+    fewer than ``1 + n_batch`` axes (a ``(duration,)`` time effect, or a
+    ``(duration, n_first_batch)`` partial panel) would otherwise have its time
+    axis matched against a batch dim. Trailing ``"x"`` axes keep time on axis 0
+    and each remaining axis on the batch dim it already names, in order.
+    Full-rank tensors and scalars are returned unchanged.
+    """
+    missing = n_batch + 1 - value.ndim
+    if value.ndim >= 1 and missing > 0:
+        return value.dimshuffle(*range(value.ndim), *("x",) * missing)
+    return value
+
+
 def _emit_observation(obs, name: str, segment, dims: tuple[str, ...], observed):
     """Dispatch one observation segment. The 4-argument factory path is unchanged."""
     if callable(obs) and _is_observation_factory(obs):
@@ -497,7 +513,10 @@ def predict(
           location is replaced by the segment latent.
     latent : pytensor.tensor.TensorVariable
         Full-horizon predictor with time on axis 0; its length along axis 0
-        must be ``h.duration``.
+        must be ``h.duration``. Remaining axes map to ``dims`` in order, so a
+        latent with fewer axes than ``(time, *dims)`` (a 1-d time effect, or
+        ``(duration, n)`` for the first batch dim) is broadcast over the
+        trailing dims it leaves out.
     expected_observation : pytensor.tensor.TensorVariable, optional
         Full-horizon conditional expected observation in observed outcome
         units, with time on axis 0. For a Poisson log-link model whose
@@ -517,7 +536,8 @@ def predict(
         classmethod whose first parameter is not ``mu``, a callable that
         creates model variables or does not return a ``.dist()``, a model
         variable instead of a ``.dist()``, a ``.dist()`` depending on unnamed
-        random variables, or a ``Prior`` with a time-dimmed hyper-prior.
+        random variables, or a ``Prior`` with a time-dimmed hyper-prior; or if
+        ``latent`` or ``expected_observation`` is 0-d.
     ValueError
         If ``obs`` is a ``Prior`` with ``mu`` set.
     KeyError
@@ -543,15 +563,30 @@ def predict(
             "generated predictive outputs — rename the model variable"
         )
         raise HorizonError(msg)
+    if latent.ndim == 0 or (expected_observation is not None and expected_observation.ndim == 0):
+        msg = (
+            "latent and expected_observation must have time on axis 0 "
+            "(length h.duration); got a 0-d tensor. Multiply a scalar by "
+            "pt.ones(h.duration) to make it a time effect"
+        )
+        raise HorizonError(msg)
     # Broadcast the recorded predictors over the full panel before slicing.
     # Broadcasting an already-sliced singleton panel axis can be rewritten
     # incorrectly by PyTensor 3.3, producing a shape error for mu_future.
+    # A time-major latent with fewer axes than the panel is padded on the
+    # right so broadcast_to does not right-align its time axis onto a batch dim.
     shape = (h.duration, *(model.dim_lengths[d] for d in dims))
-    latent_output = pt.broadcast_to(latent, shape)
+    latent_panel = _left_align_time(latent, len(dims))
+    latent_output = pt.broadcast_to(latent_panel, shape)
     expected_output = (
-        None if expected_observation is None else pt.broadcast_to(expected_observation, shape)
+        None
+        if expected_observation is None
+        else pt.broadcast_to(_left_align_time(expected_observation, len(dims)), shape)
     )
-    _emit_observation(obs, OBS_VAR, latent[: h.t_obs], (TIME_DIM, *dims), observed)
+    # Partial-rank latents use the broadcast panel, so the likelihood and "mu"
+    # see the same tensor. Full-rank latents keep the original graph.
+    observed_latent = latent_output if latent_panel is not latent else latent
+    _emit_observation(obs, OBS_VAR, observed_latent[: h.t_obs], (TIME_DIM, *dims), observed)
     pm.Deterministic(MU_VAR, latent_output[: h.t_obs], dims=(TIME_DIM, *dims))
     if expected_output is not None:
         pm.Deterministic(
@@ -560,7 +595,7 @@ def predict(
             dims=(TIME_DIM, *dims),
         )
     if h.future > 0:
-        _emit_observation(obs, FORECAST_VAR, latent[h.t_obs :], (FUTURE_DIM, *dims), None)
+        _emit_observation(obs, FORECAST_VAR, observed_latent[h.t_obs :], (FUTURE_DIM, *dims), None)
         pm.Deterministic(MU_FORECAST_VAR, latent_output[h.t_obs :], dims=(FUTURE_DIM, *dims))
         if expected_output is not None:
             pm.Deterministic(

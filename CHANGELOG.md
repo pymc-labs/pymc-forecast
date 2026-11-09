@@ -7,6 +7,57 @@ The dim/coord/group/variable names on prediction outputs (documented in
 breaking change, made only in a minor release and called out here.
 
 ## Unreleased
+- ``predict`` left-aligns a length-``duration`` latent across batch dims. A
+  1-d time effect on a square panel is no longer broadcast as a series effect,
+  so both ``mu`` and the observation log-probability follow the time axis.
+  The same holds for any time-major latent with fewer axes than the panel,
+  such as ``(duration, 1)`` or ``(duration, n_region)`` with
+  ``dims=("region", "store")``. A 0-d latent now raises ``HorizonError``
+  instead of an ``IndexError``.
+
+- Fix ``fourier_features`` on NumPy and Python scalar phases: a 0-d position
+  such as ``np.int64(10)`` or ``10.0`` is one phase, not an indexing error.
+  A built-in ``int`` is still a duration. A boolean ``time`` (``True``,
+  ``np.bool_(True)``) now raises ``TypeError`` instead of being read as a
+  duration of one or a phase of one.
+- Nested ``Prior`` parameters are name-aligned to each segment's dims. A
+  hyper-prior dimmed on ``"a"`` no longer trailing-broadcasts onto the last
+  dim of ``("time", "a", "b")`` or of the forecast segment, and the same RV
+  is shared. Observation likelihoods use the same alignment. A
+  ``centered=False`` nested prior is included: it name-aligns instead of
+  raising when the parameter is not a raw tensor.
+
+- `make_mase` accumulates the seasonal-naive scale in float64. Integer and
+  low-precision training series no longer wrap into a negative or hugely
+  inflated scale. A boolean training series now yields a scale instead of a
+  ``TypeError``. A NaN or infinity in ``train_data`` now raises ``ValueError``
+  instead of returning NaN for every score, and the factory exposes the scale
+  as ``mase.scale``.
+
+- `as_dataarray` ignores scalar pandas axis names. A named index or columns
+  axis is no longer treated as an xarray dimension, so `set_index("date")`
+  and a square frame whose index is named `covariate` keep the `time` /
+  `series` / `covariate` dims. Timezone and frequency on a named
+  `DatetimeIndex` are preserved. A Series whose own name equals a dim name
+  (`"time"`, `"series"`, ...) is returned unnamed, so `to_dataset()` works.
+
+- `predict_in_sample` and `forecast` raise `AlignmentError` when a posterior's
+  non-sample coordinates differ in labels or order from the model, instead of
+  replaying that posterior positionally and stamping the model's coordinates
+  on the result. A posterior that has no coordinate for a labeled model dim is
+  rejected too, as is a posterior labeled by a model coordinate for a variable
+  the model declares without dims (`shape=`). A model dim registered with a
+  length but no labels is checked by length only. A tz-aware `DatetimeIndex`
+  is compared as a pandas index, so a matching zone is not rejected as naive
+  UTC. An unlabeled `shape=` variable cannot be checked, so reordering the
+  data behind one still replays positionally.
+
+  Breaking for the functional `forecast`: the posterior's in-sample `time`
+  must equal the `data` window. Models built with `predict()` record `mu`
+  (and `expected_observation`) over that window, so forecasting from a later
+  origin with a posterior fitted on an earlier window now raises instead of
+  running; refit on the new window. `Forecaster.forecast` always uses its
+  training data and is unaffected.
 
 - Keep a single-zone time index's timezone and clock. Time helpers, model
   coords, and forecast outputs no longer rebuild a timezone-aware

@@ -204,3 +204,214 @@ class TestCreatePrior:
         with pm.Model() as pymc_model:
             model.priors(None, None, None)
         assert "scale" in pymc_model.named_vars
+
+
+def _distribution_param_shapes(rv):
+    """Concrete shapes of the distribution parameters (after the size input)."""
+    return [tuple(int(size) for size in inp.shape.eval()) for inp in rv.owner.inputs[2:]]
+
+
+class TestNestedPriorDims:
+    """Nested hyper-priors follow named dims, not trailing broadcast."""
+
+    def test_rv_factory_matches_prior_create_variable(self):
+        import pymc as pm
+
+        from pymc_forecast.priors import prior_rv_factory
+
+        coords = {"time": range(4), "a": ["x", "y"], "b": ["p", "q"]}
+        nested = Prior("Normal", mu=[-5.0, 8.0], sigma=0.1, dims="a")
+        dims = ("time", "a", "b")
+        with pm.Model(coords=coords):
+            reference = Prior("Normal", mu=nested, sigma=1.0, dims=dims).create_variable("ref")
+            got = prior_rv_factory(
+                Prior("Normal", mu=Prior("Normal", mu=[-5.0, 8.0], sigma=0.1, dims="a"), sigma=1.0),
+                "drift",
+            )("drift", dims)
+            assert _distribution_param_shapes(got) == _distribution_param_shapes(reference)
+
+    def test_future_segment_realigns_the_same_rv(self):
+        import pymc as pm
+
+        from pymc_forecast.priors import prior_rv_factory
+
+        coords = {
+            "time": range(4),
+            "time_future": range(3),
+            "a": ["x", "y"],
+            "b": ["p", "q"],
+        }
+        train_dims = ("time", "a", "b")
+        future_dims = ("time_future", "b", "a")
+        with pm.Model(coords=coords) as model:
+            reference = Prior(
+                "Normal",
+                mu=Prior("Normal", mu=[-5.0, 8.0], sigma=0.01, dims="a"),
+                sigma=0.01,
+                dims=future_dims,
+            ).create_variable("ref")
+            factory = prior_rv_factory(
+                Prior(
+                    "Normal",
+                    mu=Prior("Normal", mu=[-5.0, 8.0], sigma=0.01, dims="a"),
+                    sigma=0.01,
+                ),
+                "drift",
+            )
+            factory("drift", train_dims)
+            future = factory("drift_future", future_dims)
+            assert _distribution_param_shapes(future) == _distribution_param_shapes(reference)
+            assert [rv.name for rv in model.free_RVs].count("drift_mu") == 1
+            draw = pm.sample_prior_predictive(
+                20, var_names=["drift_future"], random_seed=SEED
+            ).prior["drift_future"]
+            by_a = draw.mean(("chain", "draw", "time_future")).std("b")
+            by_b = draw.mean(("chain", "draw", "time_future")).std("a")
+            assert float(by_a.max()) < 0.05
+            assert float(by_b.min()) > 1.0
+
+    def test_observation_nested_param_matches_handle_dims(self):
+        import pymc as pm
+        from pymc_extras.prior import handle_dims
+
+        from pymc_forecast.priors import prior_obs_factory
+
+        coords = {"time": range(4), "series": ["x", "y"], "batch": ["p", "q"]}
+        dims = ("time", "series", "batch")
+        observed = np.zeros((4, 2, 2))
+        with pm.Model(coords=coords):
+            raw = pm.HalfNormal("ref_sigma", sigma=1.0, dims="series")
+            reference = pm.Normal(
+                "ref",
+                mu=0.0,
+                sigma=handle_dims(raw, "series", dims),
+                dims=dims,
+            )
+            got = prior_obs_factory(
+                Prior("Normal", sigma=Prior("HalfNormal", sigma=1.0, dims="series")),
+                "obs",
+            )("y", observed, dims, observed)
+            assert _distribution_param_shapes(got)[1:] == _distribution_param_shapes(reference)[1:]
+
+    def test_length_mismatch_raises_instead_of_wrong_axis(self):
+        import pymc as pm
+        from pymc_extras.prior import UnsupportedShapeError
+
+        from pymc_forecast.priors import prior_rv_factory
+
+        # ``b`` has the vector's length, so trailing broadcast would succeed
+        # and put the ``"a"`` effect on ``b``. Name alignment must refuse.
+        coords = {"time": range(4), "a": ["x", "y"], "b": ["p", "q"]}
+        with pm.Model(coords=coords):
+            factory = prior_rv_factory(
+                Prior("Normal", mu=Prior("Normal", mu=[-5.0, 8.0], sigma=0.1, dims="a"), sigma=1.0),
+                "drift",
+            )
+            with pytest.raises(UnsupportedShapeError):
+                factory("drift", ("time", "b"))
+
+    def test_noncentered_nested_matches_create_variable(self):
+        import pymc as pm
+
+        from pymc_forecast.priors import prior_rv_factory
+
+        coords = {
+            "time": range(4),
+            "time_future": range(3),
+            "a": ["x", "y"],
+            "b": ["p", "q", "r"],
+        }
+        nested = Prior("Normal", mu=[-5.0, 8.0], sigma=0.01, dims="a")
+        dims = ("time", "a", "b")
+        future_dims = ("time_future", "b", "a")
+        with pm.Model(coords=coords) as model:
+            reference = Prior(
+                "Normal", mu=nested, sigma=0.01, centered=False, dims=dims
+            ).create_variable("ref")
+            factory = prior_rv_factory(
+                Prior(
+                    "Normal",
+                    mu=Prior("Normal", mu=[-5.0, 8.0], sigma=0.01, dims="a"),
+                    sigma=0.01,
+                    centered=False,
+                ),
+                "drift",
+            )
+            got = factory("drift", dims)
+            future = factory("drift_future", future_dims)
+            assert tuple(got.shape.eval()) == tuple(reference.shape.eval()) == (4, 2, 3)
+            assert tuple(future.shape.eval()) == (3, 3, 2)
+            assert [rv.name for rv in model.free_RVs].count("drift_mu") == 1
+            draw = pm.sample_prior_predictive(
+                40, var_names=["drift_future"], random_seed=SEED
+            ).prior["drift_future"]
+            by_a = draw.mean(("chain", "draw", "time_future")).std("b")
+            by_b = draw.mean(("chain", "draw", "time_future")).std("a")
+            assert float(by_a.max()) < 0.05
+            assert float(by_b.min()) > 1.0
+
+    def test_noncentered_scalar_nested_builds(self):
+        import pymc as pm
+
+        from pymc_forecast.priors import prior_rv_factory
+
+        coords = {"time": range(4), "a": ["x", "y"]}
+        with pm.Model(coords=coords) as model:
+            reference = Prior(
+                "Normal",
+                mu=Prior("Normal", mu=0.0, sigma=1.0),
+                sigma=0.01,
+                centered=False,
+                dims=("time", "a"),
+            ).create_variable("ref")
+            got = prior_rv_factory(
+                Prior(
+                    "Normal",
+                    mu=Prior("Normal", mu=0.0, sigma=1.0),
+                    sigma=0.01,
+                    centered=False,
+                ),
+                "drift",
+            )("drift", ("time", "a"))
+            assert tuple(got.shape.eval()) == tuple(reference.shape.eval()) == (4, 2)
+            assert [rv.name for rv in model.free_RVs].count("drift_mu") == 1
+
+
+class TestMaterializedPriorIsWellBehaved:
+    """The shared-hyperprior wrapper skips ``Prior.__init__``; generic methods must not crash."""
+
+    @staticmethod
+    def _materialized():
+        import pymc as pm
+
+        from pymc_forecast.priors import _materialize_hyperpriors
+
+        p = Prior("Normal", mu=Prior("Normal", dims="a"), sigma=1.0, dims=("time", "a", "b"))
+        coords = {"time": range(3), "a": ["a0", "a1"], "b": ["b0", "b1"]}
+        model = pm.Model(coords=coords)
+        with model:
+            mat = _materialize_hyperpriors(p, "x")
+        return p, mat, model
+
+    def test_repr_and_str(self):
+        _, mat, _ = self._materialized()
+        assert "_SharedHyperprior('x_mu', dims=('a',))" in repr(mat)
+        assert "_SharedHyperprior" in str(mat.parameters["mu"])
+
+    def test_equality(self):
+        p, mat, _ = self._materialized()
+        assert mat == mat
+        assert mat != p
+        assert mat.parameters["mu"] == mat.parameters["mu"]
+        assert mat.parameters["mu"] != p.parameters["mu"]
+
+    def test_deepcopy_keeps_the_registered_rv(self):
+        _, mat, model = self._materialized()
+        copied = mat.deepcopy()
+        assert copied.parameters["mu"].value is model["x_mu"]
+        assert copied == mat
+
+    def test_to_dict_raises_a_clear_type_error(self):
+        _, mat, _ = self._materialized()
+        with pytest.raises(TypeError, match="cannot be serialized"):
+            mat.to_dict()

@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
 import pytest
@@ -6,9 +7,10 @@ import xarray as xr
 from example_models import linear_model, make_trend_data, poisson_model
 
 from pymc_forecast.data import TIME_DIM
-from pymc_forecast.exceptions import HorizonError
-from pymc_forecast.model import ForecastingModel, Horizon, build_model
+from pymc_forecast.exceptions import AlignmentError, HorizonError
+from pymc_forecast.model import ForecastingModel, Horizon, build_model, predict
 from pymc_forecast.prediction import (
+    _require_posterior_coords,
     forecast,
     posterior_dataset,
     predict_in_sample,
@@ -367,3 +369,262 @@ class TestPredictInSample:
         data, cov, idata = fitted
         result = predict_in_sample(linear_model, idata, data, cov, num_samples=20)
         assert result["posterior_predictive"]["obs"].sizes["time"] == 30
+
+
+def _level_panel(covariates, data=None):
+    """Constant per-series level, so ``mu`` equals the replayed posterior."""
+    h = Horizon.from_data(covariates, data)
+    level = pm.Normal("level", dims="series")
+    predict(
+        h,
+        lambda loc: pm.Normal.dist(loc, 1.0),
+        pt.broadcast_to(level, (h.duration, h.data.sizes["series"])),
+    )
+
+
+def _panel(series, times):
+    return xr.DataArray(
+        np.zeros((len(times), len(series))),
+        dims=("time", "series"),
+        coords={"time": list(times), "series": list(series)},
+    )
+
+
+def _level_posterior(series, values, *, draw=3, time=None):
+    values = np.asarray(values, dtype=float)
+    if time is None:
+        data = values.reshape(1, 1, -1)
+        dims = ("chain", "draw", "series")
+        coords = {"chain": [0], "draw": [draw], "series": list(series)}
+    else:
+        data = np.broadcast_to(values, (len(time), len(series))).reshape(1, 1, len(time), -1)
+        dims = ("chain", "draw", "time", "series")
+        coords = {
+            "chain": [0],
+            "draw": [draw],
+            "time": list(time),
+            "series": list(series),
+        }
+    return xr.Dataset({"level": (dims, data)}, coords=coords)
+
+
+class TestPosteriorCoordAlignment:
+    """Replay is positional, so a mislabeled posterior must be rejected."""
+
+    def test_swapped_series_does_not_relabel(self):
+        data = _panel(["a", "b"], [10, 20, 30])
+        cov = xr.DataArray(
+            np.zeros((3, 0)),
+            dims=("time", "covariate"),
+            coords={"time": [10, 20, 30]},
+        )
+        # Posterior stores b=10, a=1. Stamping data order would return 10 for a.
+        posterior = _level_posterior(["b", "a"], [10.0, 1.0])
+        with pytest.raises(AlignmentError, match="series"):
+            predict_in_sample(_level_panel, posterior, data, cov, random_seed=0)
+
+    def test_rotated_three_series_rejected(self):
+        data = _panel(["a", "b", "c"], [10, 20, 30])
+        cov = xr.DataArray(
+            np.zeros((3, 0)), dims=("time", "covariate"), coords={"time": [10, 20, 30]}
+        )
+        posterior = _level_posterior(["b", "c", "a"], [10.0, 20.0, 1.0])
+        with pytest.raises(AlignmentError, match="series"):
+            predict_in_sample(_level_panel, posterior, data, cov, random_seed=0)
+
+    def test_renamed_duplicate_missing_and_short_coords_rejected(self):
+        data = _panel(["a", "b"], [10, 20, 30])
+        cov = xr.DataArray(
+            np.zeros((3, 0)), dims=("time", "covariate"), coords={"time": [10, 20, 30]}
+        )
+        renamed = _level_posterior(["a", "c"], [1.0, 10.0])
+        duplicated = _level_posterior(["a", "a"], [1.0, 10.0])
+        missing = _level_posterior(["a", "b"], [1.0, 10.0]).drop_vars("series")
+        short = _level_posterior(["a"], [1.0])
+        for posterior in (renamed, duplicated, missing, short):
+            with pytest.raises(AlignmentError, match="series"):
+                predict_in_sample(_level_panel, posterior, data, cov, random_seed=0)
+
+    def test_renamed_dimension_is_not_replayed_positionally(self):
+        data = _panel(["a", "b"], [10, 20, 30])
+        cov = xr.DataArray(
+            np.zeros((3, 0)), dims=("time", "covariate"), coords={"time": [10, 20, 30]}
+        )
+        # Dim name is not a model coordinate, so label comparison never runs.
+        # Storage order is b=10, a=1; stamping series=['a','b'] would return 10 for a.
+        posterior = _level_posterior(["b", "a"], [10.0, 1.0]).rename({"series": "group"})
+        with pytest.raises(AlignmentError, match="level"):
+            predict_in_sample(_level_panel, posterior, data, cov, random_seed=0)
+
+    def test_transposed_equal_length_dims_are_not_replayed_positionally(self):
+        def model_fn(covariates, data=None):
+            h = Horizon.from_data(covariates, data)
+            level = pm.Normal("level", dims=("time", "series"))
+            predict(h, lambda loc: pm.Normal.dist(loc, 1.0), level)
+
+        data = _panel(["a", "b"], [10, 20])
+        cov = xr.DataArray(np.zeros((2, 0)), dims=("time", "covariate"), coords={"time": [10, 20]})
+        # Model order is (time, series). Storage is (series, time): a=[1, 2], b=[10, 20].
+        # Positional replay would put 2.0 at series b, time 10.
+        values = np.array([[[[1.0, 2.0], [10.0, 20.0]]]])
+        posterior = xr.Dataset(
+            {"level": (("chain", "draw", "series", "time"), values)},
+            coords={
+                "chain": [0],
+                "draw": [3],
+                "series": ["a", "b"],
+                "time": [10, 20],
+            },
+        )
+        with pytest.raises(AlignmentError, match="level"):
+            predict_in_sample(model_fn, posterior, data, cov, random_seed=0)
+
+    def test_matched_order_returns_labeled_value(self):
+        data = _panel(["a", "b"], [10, 20, 30])
+        cov = xr.DataArray(
+            np.zeros((5, 0)),
+            dims=("time", "covariate"),
+            coords={"time": [10, 20, 30, 40, 50]},
+        )
+        posterior = _level_posterior(["a", "b"], [1.0, 10.0])
+        insample = prediction_samples(
+            predict_in_sample(_level_panel, posterior, data, cov, random_seed=0)
+        )["mu"]
+        future = prediction_samples(forecast(_level_panel, posterior, data, cov, random_seed=0))[
+            "mu_future"
+        ]
+        assert float(insample.sel(series="a", draw=3).values.reshape(-1)[0]) == 1.0
+        assert float(insample.sel(series="b", draw=3).values.reshape(-1)[0]) == 10.0
+        assert float(future.sel(series="a", draw=3).values.reshape(-1)[0]) == 1.0
+        assert float(future.sel(series="b", draw=3).values.reshape(-1)[0]) == 10.0
+
+    def test_forecast_rejects_swapped_series(self):
+        data = _panel(["a", "b"], [10, 20, 30])
+        cov = xr.DataArray(
+            np.zeros((5, 0)),
+            dims=("time", "covariate"),
+            coords={"time": [10, 20, 30, 40, 50]},
+        )
+        posterior = _level_posterior(["b", "a"], [10.0, 1.0])
+        with pytest.raises(AlignmentError, match="series"):
+            forecast(_level_panel, posterior, data, cov, random_seed=0)
+
+    @staticmethod
+    def _length_only_model(n_k):
+        def model_fn(covariates, data=None):
+            h = Horizon.from_data(covariates, data)
+            m = pm.modelcontext(None)
+            if "k" not in m.coords:
+                m.add_coord("k", length=n_k)  # length only, no labels
+            beta = pm.Normal("beta", 0.0, 1.0, dims="k")
+            predict(h, lambda loc: pm.Normal.dist(loc, 1.0), beta.sum() * pt.ones(h.duration))
+
+        return model_fn
+
+    def _beta_posterior(self, n_k, *, labels=True):
+        coords = {"chain": [0], "draw": [3]}
+        if labels:
+            coords["k"] = list(range(n_k))
+        return xr.Dataset(
+            {"beta": (("chain", "draw", "k"), np.arange(n_k, dtype=float).reshape(1, 1, -1))},
+            coords=coords,
+        )
+
+    @pytest.mark.parametrize("labels", [True, False])
+    def test_length_only_model_dim_is_checked_by_length(self, labels):
+        # Regression: model.coords["k"] is None, so a label comparison rejected
+        # every posterior, including the one pm.sample returns.
+        data = xr.DataArray(np.zeros(4), dims="time", coords={"time": [10, 20, 30, 40]})
+        cov = xr.DataArray(
+            np.zeros((6, 0)), dims=("time", "covariate"), coords={"time": [10, 20, 30, 40, 50, 60]}
+        )
+        model_fn = self._length_only_model(2)
+        posterior = self._beta_posterior(2, labels=labels)
+        predict_in_sample(model_fn, posterior, data, cov.isel(time=slice(0, 4)), random_seed=0)
+        forecast(model_fn, posterior, data, cov, random_seed=0)
+
+    def test_length_only_model_dim_rejects_a_different_length(self):
+        data = xr.DataArray(np.zeros(4), dims="time", coords={"time": [10, 20, 30, 40]})
+        cov = xr.DataArray(
+            np.zeros((4, 0)), dims=("time", "covariate"), coords={"time": [10, 20, 30, 40]}
+        )
+        with pytest.raises(AlignmentError, match="'k' has length 3"):
+            predict_in_sample(
+                self._length_only_model(2), self._beta_posterior(3), data, cov, random_seed=0
+            )
+
+    def test_forecast_time_must_match_training_window(self):
+        data = _panel(["a", "b"], [10, 20, 30])
+        cov = xr.DataArray(
+            np.zeros((5, 0)),
+            dims=("time", "covariate"),
+            coords={"time": [10, 20, 30, 40, 50]},
+        )
+
+        def with_mu(time):
+            # ``mu`` is recorded over the in-sample ``time``; only its labels vary.
+            posterior = _level_posterior(["a", "b"], [1.0, 10.0])
+            values = np.broadcast_to([1.0, 10.0], (len(time), 2)).reshape(1, 1, len(time), 2)
+            posterior["mu"] = xr.DataArray(
+                values, dims=("chain", "draw", "time", "series"), coords={"time": time}
+            )
+            return posterior
+
+        # Same length as the training window, shifted labels.
+        with pytest.raises(AlignmentError, match="'time' coords must match the model"):
+            forecast(_level_panel, with_mu([20, 30, 40]), data, cov, random_seed=0)
+        future = prediction_samples(
+            forecast(_level_panel, with_mu([10, 20, 30]), data, cov, random_seed=0)
+        )["mu_future"]
+        assert float(future.sel(series="a", draw=3).values.reshape(-1)[0]) == 1.0
+        assert float(future.sel(series="b", draw=3).values.reshape(-1)[0]) == 10.0
+
+    def test_tz_aware_datetimeindex_matches_without_dropping_zone(self):
+        # np.asarray on a tz-aware DatetimeIndex drops the zone. The model
+        # stores aware timestamps, so that compare rejected a matching index.
+        idx = pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC")
+        with pm.Model(coords={"time": idx}) as model:
+            pm.Normal("lvl", 0, 1, dims="time")
+
+        def posterior(time):
+            return xr.Dataset(
+                {"lvl": (("chain", "draw", "time"), np.zeros((1, 2, 4)))},
+                coords={"time": time},
+            )
+
+        _require_posterior_coords(posterior(idx), model)
+        _require_posterior_coords(posterior(pd.Index(list(idx), dtype=object)), model)
+        with pytest.raises(AlignmentError, match="time"):
+            _require_posterior_coords(posterior(idx[::-1]), model)
+        with pytest.raises(AlignmentError, match="time"):
+            _require_posterior_coords(posterior(idx + pd.Timedelta(days=1)), model)
+        with pytest.raises(AlignmentError, match="time"):
+            _require_posterior_coords(posterior(idx.tz_localize(None)), model)
+        duplicated = pd.DatetimeIndex([idx[0], idx[0], idx[1], idx[2]])
+        with pytest.raises(AlignmentError, match="unique"):
+            _require_posterior_coords(posterior(duplicated), model)
+
+    def test_labeled_posterior_for_dimless_model_var_rejected(self):
+        # The #78 values against a ``shape=`` latent: no model dims to compare,
+        # so the model's ``series`` labels would be stamped on b=10, a=1.
+        def model_fn(covariates, data=None):
+            h = Horizon.from_data(covariates, data)
+            n = h.data.sizes["series"]
+            level = pm.Normal("level", shape=n)
+            mu = pt.broadcast_to(level, (h.duration, n))
+            predict(h, lambda loc: pm.Normal.dist(loc, 1.0), mu)
+
+        data = _panel(["a", "b"], [10, 20, 30])
+        cov = xr.DataArray(
+            np.zeros((3, 0)), dims=("time", "covariate"), coords={"time": [10, 20, 30]}
+        )
+        labeled = _level_posterior(["b", "a"], [10.0, 1.0])
+        with pytest.raises(AlignmentError, match="without dims"):
+            predict_in_sample(model_fn, labeled, data, cov, random_seed=0)
+        # PyMC's default ``level_dim_0`` dims carry no model labels and replay as stored.
+        default = _level_posterior(["a", "b"], [1.0, 10.0]).rename({"series": "level_dim_0"})
+        default = default.assign_coords(level_dim_0=[0, 1])
+        result = predict_in_sample(model_fn, default, data, cov, random_seed=0)
+        mu = prediction_samples(result)["mu"]
+        assert float(mu.sel(series="a", draw=3).values.reshape(-1)[0]) == 1.0
+        assert float(mu.sel(series="b", draw=3).values.reshape(-1)[0]) == 10.0

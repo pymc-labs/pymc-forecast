@@ -19,7 +19,11 @@ def fourier_features(time, *, period: float, num_terms: int) -> xr.DataArray:
         day-of-week positions). Only a built-in ``int`` takes the duration
         branch; anything else (including a NumPy integer scalar) is converted
         with ``np.asarray(time, dtype=float)``. The positions set the phase;
-        the returned ``"time"`` coord carries them.
+        the returned ``"time"`` coord carries them. A 0-d NumPy integer such as
+        ``np.int64(52)`` is therefore one phase (a one-row matrix), not a
+        duration: convert counts from NumPy (``mask.sum()``) with ``int(...)``.
+        Booleans are rejected, since ``True`` would otherwise be read as a
+        duration of one.
     period : float
         Seasonal period, in the same units as ``time``.
     num_terms : int
@@ -35,13 +39,24 @@ def fourier_features(time, *, period: float, num_terms: int) -> xr.DataArray:
 
     Raises
     ------
+    TypeError
+        If ``time`` is a Python or NumPy boolean scalar.
     ValueError
         If ``num_terms < 1``.
     """
+    if isinstance(time, (bool, np.bool_)):
+        msg = (
+            "time must be an int duration or numeric positions, got a boolean; "
+            "pass int(time) for a duration or [float(time)] for one phase"
+        )
+        raise TypeError(msg)
     if num_terms < 1:
         msg = f"num_terms must be >= 1, got {num_terms}"
         raise ValueError(msg)
     positions = np.arange(time) if isinstance(time, int) else np.asarray(time, dtype=float)
+    # 0-d scalars (NumPy ints/floats, Python floats) are one phase, not a duration.
+    # atleast_1d leaves rank >= 2 unchanged so those inputs still fail to broadcast.
+    positions = np.atleast_1d(positions)
     angles = 2.0 * np.pi * np.arange(1, num_terms + 1)[None, :] * positions[:, None] / period
     values = np.concatenate([np.sin(angles), np.cos(angles)], axis=-1)
     labels = [f"sin_{k}" for k in range(1, num_terms + 1)] + [
