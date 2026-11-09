@@ -45,7 +45,42 @@ TIME_DIM = "time"
 FUTURE_DIM = "time_future"
 """Dim name of the forecast-horizon time dimension."""
 
+
+def _drop_axis_name(index):
+    """Return ``index`` with a scalar axis name cleared.
+
+    xarray treats ``Index.name`` as the coordinate dimension. A named pandas
+    axis would then either fail validation (``set_index("date")``) or, on a
+    square frame, bind the other axis's labels. MultiIndex level names are
+    not a single ``.name``, and ``MultiIndex.rename(None)`` raises, so those
+    indexes are returned unchanged. An unnamed index is returned as-is so
+    timezone and frequency objects are not copied away.
+    """
+    import pandas as pd
+
+    if isinstance(index, pd.MultiIndex) or index.name is None:
+        return index
+    renamed = index.copy()
+    renamed.name = None
+    return renamed
+
+
 _DEFAULT_SECOND_DIM: dict[str, str] = {"data": "series", "covariates": "covariate"}
+
+_RESERVED_DIM_NAMES = frozenset({TIME_DIM, FUTURE_DIM, *_DEFAULT_SECOND_DIM.values()})
+
+
+def _safe_series_name(name):
+    """Return a pandas Series name, or ``None`` if it collides with a dim name.
+
+    A DataArray named like one of its coordinates cannot be turned into a
+    Dataset (``to_dataset`` raises), so a Series called ``"time"`` would fail
+    later, far from where it was built.
+    """
+    if isinstance(name, str) and name in _RESERVED_DIM_NAMES:
+        return None
+    return name
+
 
 Role = Literal["data", "covariates"]
 
@@ -56,8 +91,10 @@ def as_dataarray(obj, *, role: Role = "data") -> xr.DataArray:
     Accepted inputs:
 
     - ``xarray.DataArray`` with a ``"time"`` dim (transposed time-first);
-    - ``pandas.Series`` (index becomes the time coord) or ``pandas.DataFrame``
-      (index → time coord, columns → ``"series"``/``"covariate"`` coord);
+    - ``pandas.Series`` (index becomes the time coord; a scalar index name is
+      ignored, and so is a Series name equal to a dim name such as
+      ``"time"``) or ``pandas.DataFrame`` (index → time coord, columns →
+      ``"series"``/``"covariate"`` coord; scalar axis names are ignored);
     - 1-d/2-d array-likes converted with ``np.asarray`` (integer-range time
       coord is attached).
 
@@ -97,13 +134,19 @@ def as_dataarray(obj, *, role: Role = "data") -> xr.DataArray:
 
         if isinstance(obj, pd.Series):
             da = xr.DataArray(
-                obj.to_numpy(), dims=(TIME_DIM,), coords={TIME_DIM: obj.index}, name=obj.name
+                obj.to_numpy(),
+                dims=(TIME_DIM,),
+                coords={TIME_DIM: _drop_axis_name(obj.index)},
+                name=_safe_series_name(obj.name),
             )
         elif isinstance(obj, pd.DataFrame):
             da = xr.DataArray(
                 obj.to_numpy(),
                 dims=(TIME_DIM, second),
-                coords={TIME_DIM: obj.index, second: obj.columns},
+                coords={
+                    TIME_DIM: _drop_axis_name(obj.index),
+                    second: _drop_axis_name(obj.columns),
+                },
             )
         else:
             arr = np.asarray(obj)
