@@ -15,6 +15,11 @@ breaking change, made only in a minor release and called out here.
   ``dims=("region", "store")``. A 0-d latent now raises ``HorizonError``
   instead of an ``IndexError``.
 
+- Fix ``fourier_features`` on NumPy and Python scalar phases: a 0-d position
+  such as ``np.int64(10)`` or ``10.0`` is one phase, not an indexing error.
+  A built-in ``int`` is still a duration. A boolean ``time`` (``True``,
+  ``np.bool_(True)``) now raises ``TypeError`` instead of being read as a
+  duration of one or a phase of one.
 - Nested ``Prior`` parameters are name-aligned to each segment's dims. A
   hyper-prior dimmed on ``"a"`` no longer trailing-broadcasts onto the last
   dim of ``("time", "a", "b")`` or of the forecast segment, and the same RV
