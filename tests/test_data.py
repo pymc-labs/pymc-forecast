@@ -1,3 +1,6 @@
+import datetime as dt
+import zoneinfo
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -298,11 +301,63 @@ class TestTimezonePreserved:
             validate_alignment(data, aware_prefix)
         validate_alignment(data, cov)
 
-    def test_mixed_zones_rejected(self):
+    def test_future_in_another_zone_is_converted_to_the_training_zone(self):
         train = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="Asia/Kolkata")
         future = pd.date_range("2020-01-11 02:00", periods=2, freq="h", tz="America/New_York")
-        with pytest.raises(AlignmentError, match="timezone"):
-            concat_time_index(train, future)
+        full = concat_time_index(train, future)
+        assert str(full.tz) == "Asia/Kolkata"
+        assert full[3:].equals(future.tz_convert("Asia/Kolkata"))
+
+    @pytest.mark.parametrize(
+        ("train_tz", "future_tz"),
+        [
+            ("UTC", dt.UTC),
+            ("UTC", zoneinfo.ZoneInfo("UTC")),
+            (dt.UTC, zoneinfo.ZoneInfo("UTC")),
+            ("America/New_York", zoneinfo.ZoneInfo("America/New_York")),
+            ("America/New_York", "dateutil/America/New_York"),
+            (zoneinfo.ZoneInfo("America/New_York"), "dateutil/America/New_York"),
+        ],
+    )
+    def test_same_zone_from_different_tz_libraries_is_accepted(self, train_tz, future_tz):
+        train = pd.date_range("2024-01-01", periods=3, freq="D", tz=train_tz)
+        future = pd.date_range("2024-01-04", periods=2, freq="D", tz=future_tz)
+        full = concat_time_index(train, future)
+        assert full.tz == train.tz
+        assert list(full) == list(train) + list(future)
+
+    def test_data_and_covariates_in_different_zones_align_on_instants(self):
+        utc = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
+        data = as_dataarray(pd.Series([1.0, 2.0, 3.0], index=utc))
+        berlin = pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC").tz_convert(
+            "Europe/Berlin"
+        )
+        cov = as_dataarray(
+            pd.DataFrame({"x": [0.0, 1.0, 2.0, 3.0]}, index=berlin), role="covariates"
+        )
+        validate_alignment(data, cov)
+        shifted = as_dataarray(
+            pd.DataFrame({"x": [0.0, 1.0, 2.0, 3.0]}, index=berlin + pd.Timedelta(hours=1)),
+            role="covariates",
+        )
+        with pytest.raises(AlignmentError, match="misaligned"):
+            validate_alignment(data, shifted)
+
+    def test_horizon_stamps_covariates_in_the_data_zone(self):
+        from pymc_forecast.model import Horizon
+
+        utc = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
+        data = as_dataarray(pd.Series([1.0, 2.0, 3.0], index=utc))
+        berlin = pd.date_range("2024-01-01", periods=5, freq="D", tz="UTC").tz_convert(
+            "Europe/Berlin"
+        )
+        cov = as_dataarray(pd.DataFrame({"x": np.arange(5.0)}, index=berlin), role="covariates")
+        h = Horizon.from_data(cov, data)
+        assert h.time.equals(utc)
+        assert h.time_future.equals(pd.date_range("2024-01-04", periods=2, freq="D", tz="UTC"))
+
+    def test_mixed_zones_rejected(self):
+        train = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="Asia/Kolkata")
         mixed = pd.Index(
             [
                 pd.Timestamp("2020-01-11 02:00", tz="Pacific/Chatham"),

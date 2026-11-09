@@ -193,6 +193,33 @@ def _single_zone(index):
     return zones[0] if zones else None
 
 
+def _common_zone(reference, other):
+    """Express ``other`` in ``reference``'s timezone when both are aware.
+
+    Two aware indexes are compared as instants: ``other`` is converted to the
+    reference zone, so the same zone from different tz libraries (``pytz``,
+    ``zoneinfo``, ``dateutil``, ``datetime.timezone.utc``) and a different zone
+    holding the same instants both line up. Zone objects are never compared
+    with ``==``, since aliases of one zone compare unequal. A naive index next
+    to an aware one is returned unchanged; comparing them fails later with the
+    usual not-comparable error.
+
+    Raises
+    ------
+    pymc_forecast.exceptions.AlignmentError
+        If either index mixes timezones.
+    """
+    import pandas as pd
+
+    ref_tz = _single_zone(reference)
+    other_tz = _single_zone(other)
+    if ref_tz is None or other_tz is None:
+        return reference, other
+    reference = pd.DatetimeIndex(reference)
+    other = pd.DatetimeIndex(other).tz_convert(reference.tz)
+    return reference, other
+
+
 def null_covariates(index) -> xr.DataArray:
     """Zero-width covariates carrying only the time coord.
 
@@ -325,14 +352,7 @@ def concat_time_index(index, future_index):
     if len(fut) == 0:
         msg = "future time index is empty; supply at least one forecast step"
         raise AlignmentError(msg)
-    idx_tz = _single_zone(idx)
-    fut_tz = _single_zone(fut)
-    if idx_tz is not None and fut_tz is not None and idx_tz != fut_tz:
-        msg = (
-            "future time index timezone does not match the training timezone: "
-            f"{fut_tz!r} vs {idx_tz!r}"
-        )
-        raise AlignmentError(msg)
+    idx, fut = _common_zone(idx, fut)
     if not (fut.is_monotonic_increasing and fut.is_unique):
         msg = "future time index must be strictly increasing"
         raise AlignmentError(msg)
@@ -457,8 +477,7 @@ def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
             f"{covariates.sizes[TIME_DIM]} covariate steps < {t_obs} data steps"
         )
         raise AlignmentError(msg)
-    data_time = as_time_index(data)
-    cov_time = as_time_index(covariates)
+    data_time, cov_time = _common_zone(as_time_index(data), as_time_index(covariates))
     if not data_time.equals(cov_time[:t_obs]):
         msg = (
             f"the first {t_obs} covariate '{TIME_DIM}' coords must equal the data "

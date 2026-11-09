@@ -39,6 +39,7 @@ from pymc_forecast._dist import (
 from pymc_forecast.data import (
     FUTURE_DIM,
     TIME_DIM,
+    _common_zone,
     as_dataarray,
     as_time_index,
     validate_alignment,
@@ -193,6 +194,9 @@ class Horizon:
         if data is None:
             return cls(data=None, time=cov_time)
         validate_alignment(data, covariates)
+        # Covariates holding the same instants in another zone are stamped in
+        # the data's zone, so model coords and outputs use one clock.
+        _, cov_time = _common_zone(as_time_index(data), cov_time)
         t_obs = data.sizes[TIME_DIM]
         return cls(data=data, time=cov_time[:t_obs], time_future=cov_time[t_obs:])
 
