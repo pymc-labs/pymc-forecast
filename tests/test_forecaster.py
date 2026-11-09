@@ -597,8 +597,24 @@ class TestSingleZoneTimeIndex:
         fc = Forecaster(_Level(), data, num_steps=5, progressbar=False)
         assert pd.DatetimeIndex(fc.model.coords["time"]).equals(local)
         samples = fc.predict_in_sample(num_samples=1, random_seed=0)
-        observed = samples["posterior_predictive"]["mu"].get_index("time")
-        assert pd.DatetimeIndex(list(observed)).equals(local)
+        mu = samples["posterior_predictive"]["mu"]
+        observed = mu.get_index("time")
+        assert isinstance(observed, pd.DatetimeIndex)
+        assert observed.equals(local)
+        assert mu.sel(time="2020-01-10").sizes["time"] == 2
+        assert mu.resample(time="D").mean().sizes["time"] == 2
+
+    @pytest.mark.parametrize("batch_size", [None, 1])
+    def test_forecast_time_future_is_a_datetime_index(self, batch_size):
+        local = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="America/Los_Angeles")
+        data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": local})
+        fc = Forecaster(_Level(), data, num_steps=5, progressbar=False)
+        result = fc.forecast(horizon=2, num_samples=2, random_seed=0, batch_size=batch_size)
+        index = result["predictions"]["forecast"].get_index("time_future")
+        assert isinstance(index, pd.DatetimeIndex)
+        assert index.equals(
+            pd.date_range("2020-01-11 01:00", periods=2, freq="h", tz="America/Los_Angeles")
+        )
 
     def test_future_index_keeps_utc(self):
         train = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
