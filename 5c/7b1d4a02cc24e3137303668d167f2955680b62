@@ -1,0 +1,23 @@
+CHANGELOG.md
+  s_88b7deb132a23a::t_9194b13042c95e 13-16
+pymc_forecast/metrics.py
+  s_88b7deb132a23a::t_01a7e64a3bb2df 381,388-389,408-413,424
+tests/test_metrics.py
+  s_88b7deb132a23a::t_3c07339d7934da 156-169,190-191
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "5c7b1d4a02cc24e3137303668d167f2955680b62",
+  "prompts": {},
+  "sessions": {
+    "s_88b7deb132a23a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4c6bbef4-f174-436a-8f64-259eaac0f539",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "daimon-pymclabs <daimon-pymclabs@users.noreply.github.com>"
+    }
+  }
+}
