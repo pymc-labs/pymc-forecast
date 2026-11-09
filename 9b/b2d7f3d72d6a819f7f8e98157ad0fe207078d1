@@ -1,0 +1,23 @@
+pymc_forecast/data.py
+  s_e8be3aaf5cec84::t_7959998fa5b901 411-416
+tests/test_data.py
+  s_e8be3aaf5cec84::t_4c8808f6051f0b 324-328,373-384
+tests/test_ssoe.py
+  s_e8be3aaf5cec84::t_527306aa48f7a6 453
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "9bb2d7f3d72d6a819f7f8e98157ad0fe207078d1",
+  "prompts": {},
+  "sessions": {
+    "s_e8be3aaf5cec84": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f970fd50-c917-431d-903a-79b5292763b9",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "root <root@e2b.local>"
+    }
+  }
+}
