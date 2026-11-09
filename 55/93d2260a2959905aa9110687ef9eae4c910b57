@@ -1,0 +1,20 @@
+pymc_forecast/data.py
+  h_63db634213747e 172-206,210-212,220-221,223,225-233,236,521-525,538-540
+pymc_forecast/statespace.py
+  h_63db634213747e 35,545-548
+tests/test_data.py
+  h_63db634213747e 316-339
+tests/test_statespace.py
+  h_63db634213747e 352-387
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5593d2260a2959905aa9110687ef9eae4c910b57",
+  "prompts": {},
+  "humans": {
+    "h_63db634213747e": {
+      "author": "Benjamin T. Vincent <inferencelab@gmail.com>"
+    }
+  }
+}
