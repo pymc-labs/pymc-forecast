@@ -12,7 +12,8 @@ breaking change, made only in a minor release and called out here.
   axis is no longer treated as an xarray dimension, so `set_index("date")`
   and a square frame whose index is named `covariate` keep the `time` /
   `series` / `covariate` dims. Timezone and frequency on a named
-  `DatetimeIndex` are preserved.
+  `DatetimeIndex` are preserved. A Series whose own name equals a dim name
+  (`"time"`, `"series"`, ...) is returned unnamed, so `to_dataset()` works.
 
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the

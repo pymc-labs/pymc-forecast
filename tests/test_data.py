@@ -90,6 +90,17 @@ class TestAsDataarray:
         assert converted.freq == index.freq
         assert converted.name != "date"
 
+    @pytest.mark.parametrize("name", ["time", "time_future", "series", "covariate"])
+    def test_series_named_like_a_dim_still_makes_a_dataset(self, name):
+        s = pd.Series([1.0, 2.0, 3.0], index=pd.Index([10, 20, 30], name="date"), name=name)
+        da = as_dataarray(s)
+        assert da.name is None
+        assert set(da.to_dataset(name="y").data_vars) == {"y"}
+
+    def test_ordinary_series_name_is_kept(self):
+        s = pd.Series([1.0, 2.0], name="sales")
+        assert as_dataarray(s).name == "sales"
+
     def test_multiindex_is_not_renamed(self):
         index = pd.MultiIndex.from_product([["a", "b"], [0, 1]], names=["group", "step"])
         frame = pd.DataFrame({"v": [1.0, 2.0, 3.0, 4.0]}, index=index)
