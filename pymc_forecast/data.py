@@ -408,7 +408,12 @@ def concat_covariates(covariates, future_covariates) -> xr.DataArray:
     covariates = as_dataarray(covariates, role="covariates")
     fut = as_dataarray(future_covariates, role="covariates")
     _validate_covariate_structure(covariates, fut)
-    concat_time_index(as_time_index(covariates), as_time_index(fut))
+    full = concat_time_index(as_time_index(covariates), as_time_index(fut))
+    # Stamp both pieces with the validated index, so a future block in another
+    # zone (or the same zone from another tz library) lands on the training clock.
+    t_obs = covariates.sizes[TIME_DIM]
+    covariates = covariates.assign_coords({TIME_DIM: full[:t_obs]})
+    fut = fut.assign_coords({TIME_DIM: full[t_obs:]})
     return xr.concat([covariates, fut], dim=TIME_DIM, join="exact")
 
 

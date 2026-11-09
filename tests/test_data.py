@@ -321,7 +321,11 @@ class TestTimezonePreserved:
     )
     def test_same_zone_from_different_tz_libraries_is_accepted(self, train_tz, future_tz):
         train = pd.date_range("2024-01-01", periods=3, freq="D", tz=train_tz)
-        future = pd.date_range("2024-01-04", periods=2, freq="D", tz=future_tz)
+        try:
+            future = pd.date_range("2024-01-04", periods=2, freq="D", tz=future_tz)
+        except AttributeError:
+            # Some pandas/dateutil pairings cannot build a dateutil zone at all.
+            pytest.skip(f"this pandas/dateutil pairing cannot construct {future_tz!r}")
         full = concat_time_index(train, future)
         assert full.tz == train.tz
         assert list(full) == list(train) + list(future)
@@ -366,3 +370,15 @@ class TestTimezonePreserved:
         )
         with pytest.raises(AlignmentError, match="mixes timezones"):
             concat_time_index(train, mixed)
+
+
+def test_concat_covariates_stamps_future_rows_in_the_training_zone():
+    train = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="Asia/Kolkata")
+    future = pd.date_range("2020-01-11 02:00", periods=2, freq="h", tz="America/New_York")
+    cov = pd.DataFrame({"x": [0.0, 1.0, 2.0]}, index=train)
+    fut = pd.DataFrame({"x": [3.0, 4.0]}, index=future)
+    out = concat_covariates(cov, fut)
+    index = out.indexes["time"]
+    assert str(index.tz) == "Asia/Kolkata"
+    assert index[3:].equals(future.tz_convert("Asia/Kolkata"))
+    np.testing.assert_array_equal(out.values.ravel(), [0.0, 1.0, 2.0, 3.0, 4.0])
