@@ -170,6 +170,39 @@ def _shared_hyperprior_cls():
             def create_variable(self, name: str, xdist: bool = False):
                 return self.value
 
+            # ``Prior.__init__`` is skipped, so the generic ``Prior`` methods
+            # that read ``_distribution``/``core_dims``/``centered`` would raise
+            # ``AttributeError``. Override the ones that can reach a
+            # materialized copy (logging, debuggers, equality, copies).
+            def __str__(self) -> str:
+                name = getattr(self.value, "name", None)
+                return f"_SharedHyperprior({name!r}, dims={self._dims})"
+
+            __repr__ = __str__
+
+            def __eq__(self, other) -> bool:
+                return (
+                    isinstance(other, type(self))
+                    and other.value is self.value
+                    and other._dims == self._dims
+                )
+
+            __hash__ = object.__hash__
+
+            def __deepcopy__(self, memo):
+                # Sharing the one RV across segments is the point of the wrapper.
+                return self
+
+            def deepcopy(self):
+                return self
+
+            def to_dict(self):
+                msg = (
+                    "a materialized hyper-prior is bound to a PyMC model and "
+                    "cannot be serialized; serialize the original Prior instead"
+                )
+                raise TypeError(msg)
+
         _SHARED_HYPERPRIOR_CLS = _SharedHyperprior
     return _SHARED_HYPERPRIOR_CLS
 
