@@ -26,7 +26,7 @@ import xarray as xr
 from pymc_forecast.data import TIME_DIM, as_dataarray, as_time_index, null_covariates
 from pymc_forecast.exceptions import HorizonError, MethodResolutionError, OptionalDependencyError
 from pymc_forecast.model import FORECAST_VAR, build_model
-from pymc_forecast.prediction import _restore_time_index, posterior_dataset, thin_draws
+from pymc_forecast.prediction import _aware_time_index, posterior_dataset, thin_draws
 
 __all__ = ["FitResult", "draw_posterior", "fit_mcmc", "fit_pathfinder", "fit_vi"]
 
@@ -420,9 +420,7 @@ def fit_mcmc(
         progressbar=progressbar,
         **kwargs,
     )
-    return FitResult(
-        idata=_restore_time_index(idata, fitted), approx=None, losses=None, method="mcmc"
-    )
+    return FitResult(idata=idata, approx=None, losses=None, method="mcmc")
 
 
 def fit_pathfinder(
@@ -493,15 +491,13 @@ def fit_pathfinder(
         progressbar=progressbar,
         **kwargs,
     )
-    return FitResult(
-        idata=_restore_time_index(idata, fitted), approx=None, losses=None, method="pathfinder"
-    )
+    return FitResult(idata=idata, approx=None, losses=None, method="pathfinder")
 
 
 def _draw_once(result: FitResult, num_samples: int, random_seed=None) -> xr.Dataset:
     if result.idata is None:
         idata = result.approx.sample(draws=num_samples, random_seed=random_seed)
-        return _restore_time_index(posterior_dataset(idata), result.approx.model)
+        return _aware_time_index(posterior_dataset(idata))
     return thin_draws(result.idata, num_samples, random_seed)
 
 

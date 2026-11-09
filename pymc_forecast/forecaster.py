@@ -40,7 +40,7 @@ from pymc_forecast.fit import (
 )
 from pymc_forecast.model import build_model
 from pymc_forecast.prediction import (
-    _restore_time_index,
+    _aware_time_index,
     posterior_dataset,
     predict_in_sample,
     thin_draws,
@@ -642,7 +642,7 @@ class Forecaster(BaseForecaster):
     def _draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
         """Draw ``num_samples`` posterior samples from the approximation."""
         idata = self.approx.sample(draws=num_samples, random_seed=random_seed)
-        return _restore_time_index(posterior_dataset(idata), self.model)
+        return _aware_time_index(posterior_dataset(idata))
 
 
 class HMCForecaster(BaseForecaster):

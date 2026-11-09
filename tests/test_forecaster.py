@@ -1,6 +1,7 @@
 import inspect
 import warnings
 
+import arviz as az
 import numpy as np
 import pandas as pd
 import pymc as pm
@@ -665,19 +666,24 @@ class TestSingleZoneTimeIndex:
         assert cov_index.equals(future)
         assert index_index.equals(future)
 
-    def test_hmc_idata_keeps_datetime_index(self):
+    def test_hmc_idata_still_summarizes_with_tz_aware_time(self):
         fc = HMCForecaster(
             _Level(), _local_data(), draws=10, tune=10, chains=1, random_seed=0, progressbar=False
         )
-        _assert_local_clock(fc.idata["posterior"]["mu"])
-        _assert_local_clock(fc.idata["observed_data"]["obs"])
+        # ``level`` plus one ``mu`` row per time step.
+        assert az.summary(fc.idata).shape[0] == 1 + len(LOCAL)
+
+    def test_hmc_draw_posterior_keeps_datetime_index(self):
+        fc = HMCForecaster(
+            _Level(), _local_data(), draws=10, tune=10, chains=1, random_seed=0, progressbar=False
+        )
         _assert_local_clock(fc.draw_posterior(2, random_seed=0)["mu"])
 
     def test_advi_draw_posterior_keeps_datetime_index(self):
         fc = Forecaster(_Level(), _local_data(), num_steps=5, progressbar=False)
         _assert_local_clock(fc.draw_posterior(2, random_seed=0)["mu"])
 
-    def test_pathfinder_idata_keeps_datetime_index(self):
+    def test_pathfinder_draw_posterior_keeps_datetime_index(self):
         pytest.importorskip("pymc_extras")
         fc = PathfinderForecaster(_Level(), _local_data(), random_seed=0, progressbar=False)
-        _assert_local_clock(fc.idata["posterior"]["mu"])
+        _assert_local_clock(fc.draw_posterior(2, random_seed=0)["mu"])

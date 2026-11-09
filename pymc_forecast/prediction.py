@@ -26,6 +26,7 @@ from pymc_forecast.data import (
     DRAW_DIM,
     FUTURE_DIM,
     TIME_DIM,
+    _single_zone,
     as_dataarray,
     as_time_index,
     null_covariates,
@@ -169,7 +170,7 @@ def thin_draws(posterior, num_samples: int, random_seed=None) -> xr.Dataset:
     total = ds.sizes["__sample__"]
     rng = np.random.default_rng(random_seed)
     index = rng.choice(total, size=num_samples, replace=num_samples > total)
-    return (
+    return _aware_time_index(
         ds.isel(__sample__=index)
         .reset_index("__sample__")
         .drop_vars(["chain", "draw"], errors="ignore")
@@ -178,6 +179,31 @@ def thin_draws(posterior, num_samples: int, random_seed=None) -> xr.Dataset:
         .expand_dims(chain=[0])
         .transpose("chain", "draw", ...)
     )
+
+
+def _aware_time_index(ds: xr.Dataset) -> xr.Dataset:
+    """Restamp an object ``time``/``time_future`` index of one-zone timestamps.
+
+    A fitted posterior keeps tz-aware time coords as an object ``Index`` of
+    ``Timestamp``s (PyMC stores model coords as tuples). Draws handed to users
+    get a ``DatetimeIndex`` instead, so ``.sel`` by date string and
+    ``.resample`` work. The fit ``idata`` itself is left as PyMC returns it:
+    ArviZ summaries and plots reject a tz-aware ``DatetimeIndex`` coord.
+    """
+    import pandas as pd
+
+    stamps = {}
+    for dim in (TIME_DIM, FUTURE_DIM):
+        if dim not in ds.indexes or ds.indexes[dim].dtype != object:
+            continue
+        index = ds.indexes[dim]
+        try:
+            if _single_zone(index) is None:
+                continue
+            stamps[dim] = pd.DatetimeIndex(list(index))
+        except (AlignmentError, TypeError, ValueError):
+            continue  # mixed zones or non-datetime labels: leave as is
+    return ds.assign_coords(stamps) if stamps else ds
 
 
 def _chunk_seeds(random_seed, num_chunks: int) -> list:

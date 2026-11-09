@@ -77,9 +77,11 @@ breaking change, made only in a minor release and called out here.
   reported as a generic misalignment. Time coords are compared independent
   of datetime resolution, so data at ``datetime64[s]`` aligns with
   covariates at ``datetime64[ns]`` on pandas 2 too. Prediction outputs and
-  fitted posteriors (``idata`` from MCMC and Pathfinder, and every
-  ``draw_posterior`` result) carry ``time``/``time_future`` as a tz-aware
-  ``DatetimeIndex``, so ``.sel`` by date string and ``.resample`` work.
+  posterior draws (every ``draw_posterior`` result) carry
+  ``time``/``time_future`` as a tz-aware ``DatetimeIndex``, so ``.sel`` by
+  date string and ``.resample`` work. ``FitResult.idata`` keeps the object
+  index PyMC returns, because ArviZ summaries and plots reject a tz-aware
+  ``DatetimeIndex`` coord.
   Statespace ``forecast`` stamps ``time_future`` without treating the
   training index name ``"time"`` as that dimension.
 - Breaking: ``Horizon.from_data`` stores ``time``/``time_future`` as a
