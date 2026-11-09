@@ -236,7 +236,8 @@ def _require_posterior_coords(posterior_ds: xr.Dataset, model: pm.Model) -> None
     values are frozen positionally and stamped with the model's labels. Sample
     dims ``chain`` and ``draw`` are not model coordinates and are ignored.
     ``time`` is compared to the model's in-sample ``time``, never to
-    ``time_future``.
+    ``time_future``. A model dim with a length but no labels is checked by
+    length only.
     """
     sample_dims = {CHAIN_DIM, DRAW_DIM}
     checked: set[str] = set()
@@ -264,7 +265,21 @@ def _require_posterior_coords(posterior_ds: xr.Dataset, model: pm.Model) -> None
                     "to check against"
                 )
                 raise AlignmentError(msg)
-            expected = np.asarray(model.coords[dim])
+            labels = model.coords[dim]
+            if labels is None:
+                # A dim registered with a length only (``add_coord(dim, length=n)``)
+                # has no labels to compare; the posterior carries default integer
+                # labels. Only the length can be checked.
+                expected_length = int(model.dim_lengths[dim].eval())
+                got_length = posterior_ds.sizes.get(dim)
+                if got_length != expected_length:
+                    msg = (
+                        f"posterior dim {dim!r} has length {got_length}; the model "
+                        f"registers it with length {expected_length} and no labels"
+                    )
+                    raise AlignmentError(msg)
+                continue
+            expected = np.asarray(labels)
             if dim not in posterior_ds.coords:
                 msg = (
                     f"posterior dim {dim!r} is missing coordinates; "
