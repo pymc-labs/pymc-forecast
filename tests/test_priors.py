@@ -375,3 +375,43 @@ class TestNestedPriorDims:
             )("drift", ("time", "a"))
             assert tuple(got.shape.eval()) == tuple(reference.shape.eval()) == (4, 2)
             assert [rv.name for rv in model.free_RVs].count("drift_mu") == 1
+
+
+class TestMaterializedPriorIsWellBehaved:
+    """The shared-hyperprior wrapper skips ``Prior.__init__``; generic methods must not crash."""
+
+    @staticmethod
+    def _materialized():
+        import pymc as pm
+
+        from pymc_forecast.priors import _materialize_hyperpriors
+
+        p = Prior("Normal", mu=Prior("Normal", dims="a"), sigma=1.0, dims=("time", "a", "b"))
+        coords = {"time": range(3), "a": ["a0", "a1"], "b": ["b0", "b1"]}
+        model = pm.Model(coords=coords)
+        with model:
+            mat = _materialize_hyperpriors(p, "x")
+        return p, mat, model
+
+    def test_repr_and_str(self):
+        _, mat, _ = self._materialized()
+        assert "_SharedHyperprior('x_mu', dims=('a',))" in repr(mat)
+        assert "_SharedHyperprior" in str(mat.parameters["mu"])
+
+    def test_equality(self):
+        p, mat, _ = self._materialized()
+        assert mat == mat
+        assert mat != p
+        assert mat.parameters["mu"] == mat.parameters["mu"]
+        assert mat.parameters["mu"] != p.parameters["mu"]
+
+    def test_deepcopy_keeps_the_registered_rv(self):
+        _, mat, model = self._materialized()
+        copied = mat.deepcopy()
+        assert copied.parameters["mu"].value is model["x_mu"]
+        assert copied == mat
+
+    def test_to_dict_raises_a_clear_type_error(self):
+        _, mat, _ = self._materialized()
+        with pytest.raises(TypeError, match="cannot be serialized"):
+            mat.to_dict()
