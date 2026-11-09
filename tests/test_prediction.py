@@ -560,10 +560,24 @@ class TestPosteriorCoordAlignment:
             dims=("time", "covariate"),
             coords={"time": [10, 20, 30, 40, 50]},
         )
-        # Future labels are the wrong window even though the length matches a horizon.
-        wrong_time = _level_posterior(["a", "b"], [1.0, 10.0], time=[40, 50])
-        with pytest.raises(AlignmentError, match="time"):
-            forecast(_level_panel, wrong_time, data, cov, random_seed=0)
+
+        def with_mu(time):
+            # ``mu`` is recorded over the in-sample ``time``; only its labels vary.
+            posterior = _level_posterior(["a", "b"], [1.0, 10.0])
+            values = np.broadcast_to([1.0, 10.0], (len(time), 2)).reshape(1, 1, len(time), 2)
+            posterior["mu"] = xr.DataArray(
+                values, dims=("chain", "draw", "time", "series"), coords={"time": time}
+            )
+            return posterior
+
+        # Same length as the training window, shifted labels.
+        with pytest.raises(AlignmentError, match="'time' coords must match the model"):
+            forecast(_level_panel, with_mu([20, 30, 40]), data, cov, random_seed=0)
+        future = prediction_samples(
+            forecast(_level_panel, with_mu([10, 20, 30]), data, cov, random_seed=0)
+        )["mu_future"]
+        assert float(future.sel(series="a", draw=3).values.reshape(-1)[0]) == 1.0
+        assert float(future.sel(series="b", draw=3).values.reshape(-1)[0]) == 10.0
 
     def test_tz_aware_datetimeindex_matches_without_dropping_zone(self):
         # np.asarray on a tz-aware DatetimeIndex drops the zone. The model
@@ -589,3 +603,28 @@ class TestPosteriorCoordAlignment:
         duplicated = pd.DatetimeIndex([idx[0], idx[0], idx[1], idx[2]])
         with pytest.raises(AlignmentError, match="unique"):
             _require_posterior_coords(posterior(duplicated), model)
+
+    def test_labeled_posterior_for_dimless_model_var_rejected(self):
+        # The #78 values against a ``shape=`` latent: no model dims to compare,
+        # so the model's ``series`` labels would be stamped on b=10, a=1.
+        def model_fn(covariates, data=None):
+            h = Horizon.from_data(covariates, data)
+            n = h.data.sizes["series"]
+            level = pm.Normal("level", shape=n)
+            mu = pt.broadcast_to(level, (h.duration, n))
+            predict(h, lambda loc: pm.Normal.dist(loc, 1.0), mu)
+
+        data = _panel(["a", "b"], [10, 20, 30])
+        cov = xr.DataArray(
+            np.zeros((3, 0)), dims=("time", "covariate"), coords={"time": [10, 20, 30]}
+        )
+        labeled = _level_posterior(["b", "a"], [10.0, 1.0])
+        with pytest.raises(AlignmentError, match="without dims"):
+            predict_in_sample(model_fn, labeled, data, cov, random_seed=0)
+        # PyMC's default ``level_dim_0`` dims carry no model labels and replay as stored.
+        default = _level_posterior(["a", "b"], [1.0, 10.0]).rename({"series": "level_dim_0"})
+        default = default.assign_coords(level_dim_0=[0, 1])
+        result = predict_in_sample(model_fn, default, data, cov, random_seed=0)
+        mu = prediction_samples(result)["mu"]
+        assert float(mu.sel(series="a", draw=3).values.reshape(-1)[0]) == 1.0
+        assert float(mu.sel(series="b", draw=3).values.reshape(-1)[0]) == 10.0

@@ -239,6 +239,13 @@ def _require_posterior_coords(posterior_ds: xr.Dataset, model: pm.Model) -> None
     ``time_future``. A model dim with a length but no labels is checked by
     length only. Labels are compared as pandas indexes: ``np.asarray`` on a
     tz-aware ``DatetimeIndex`` drops the zone and would reject a match.
+
+    A model variable declared without ``dims`` has no labels to compare, so a
+    posterior for it must not carry a model coordinate either: a posterior
+    ``level`` labeled ``series=["b", "a"]`` against a ``shape=`` ``level`` would
+    be replayed positionally under the model's ``series`` labels. Its default
+    ``{name}_dim_{i}`` dims are accepted, and a reorder of the data behind
+    such a variable cannot be detected.
     """
     import pandas as pd
 
@@ -247,6 +254,14 @@ def _require_posterior_coords(posterior_ds: xr.Dataset, model: pm.Model) -> None
     model_dims = model.named_vars_to_dims
     for name, var in posterior_ds.data_vars.items():
         if name not in model_dims:
+            labeled = [dim for dim in var.dims if dim not in sample_dims and dim in model.coords]
+            if name in model.named_vars and labeled:
+                msg = (
+                    f"posterior variable {name!r} is labeled by model coordinate(s) "
+                    f"{labeled} but the model declares it without dims, so it would "
+                    "be replayed positionally and stamped with the model's coordinates"
+                )
+                raise AlignmentError(msg)
             continue
         expected_dims = tuple(dim for dim in model_dims[name] if dim not in sample_dims)
         got_dims = tuple(dim for dim in var.dims if dim not in sample_dims)
@@ -446,8 +461,13 @@ def forecast(
         ``"chain"`` and ``"draw"``) is missing, duplicated, or not identical
         in labels and order to the model's coordinate. ``"time"`` on the
         posterior is the training window and must match the model's in-sample
-        ``"time"``, not ``"time_future"``. A dimension whose name is not the
-        model's is rejected the same way. The posterior is not reindexed.
+        ``"time"``, not ``"time_future"``. Models built with
+        :func:`~pymc_forecast.model.predict` record ``"mu"`` over that window,
+        so ``data`` must be the window the posterior was fitted on; a later
+        forecast origin needs a refit. A dimension whose name is not the
+        model's is rejected the same way, as is a model coordinate on a
+        variable the model declares without dims. The posterior is not
+        reindexed.
     ValueError
         If ``num_samples`` or ``batch_size`` is not positive.
     TypeError
@@ -536,7 +556,8 @@ def predict_in_sample(
         Also if a non-sample posterior coordinate (any dim other than
         ``"chain"`` and ``"draw"``) is missing, duplicated, or not identical
         in labels and order to the model's coordinate. A dimension whose name
-        is not the model's is rejected the same way. The posterior is not
+        is not the model's is rejected the same way, as is a model coordinate
+        on a variable the model declares without dims. The posterior is not
         reindexed.
     pymc_forecast.exceptions.HorizonError
         If the model body does not register ``"obs"``.

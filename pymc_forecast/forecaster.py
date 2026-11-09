@@ -381,8 +381,9 @@ class BaseForecaster(abc.ABC):
             (any dim other than ``"chain"`` and ``"draw"``) is missing,
             duplicated, or not identical in labels and order to the model
             coordinate. A dimension whose name is not the model's is rejected
-            the same way. ``"time"`` must match the training window, not
-            ``"time_future"``. The posterior is not reindexed.
+            the same way, as is a model coordinate on a variable the model
+            declares without dims. ``"time"`` must match the training window,
+            not ``"time_future"``. The posterior is not reindexed.
         pymc_forecast.exceptions.HorizonError
             If the resulting horizon is empty (e.g. ``horizon=0``).
         TypeError
@@ -485,8 +486,9 @@ class BaseForecaster(abc.ABC):
             If a non-sample coordinate on ``posterior`` (any dim other than
             ``"chain"`` and ``"draw"``) is missing, duplicated, or not
             identical in labels and order to the model coordinate. A dimension
-            whose name is not the model's is rejected the same way. The
-            posterior is not reindexed.
+            whose name is not the model's is rejected the same way, as is a
+            model coordinate on a variable the model declares without dims.
+            The posterior is not reindexed.
         """
         self._require_fitted()
         posterior = self._resolve_posterior(posterior, num_samples, random_seed)

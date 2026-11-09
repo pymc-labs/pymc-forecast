@@ -12,9 +12,19 @@ breaking change, made only in a minor release and called out here.
   non-sample coordinates differ in labels or order from the model, instead of
   replaying that posterior positionally and stamping the model's coordinates
   on the result. A posterior that has no coordinate for a labeled model dim is
-  rejected too. A model dim registered with a length but no labels is checked
-  by length only. A tz-aware `DatetimeIndex` is compared as a pandas index,
-  so a matching zone is not rejected as naive UTC.
+  rejected too, as is a posterior labeled by a model coordinate for a variable
+  the model declares without dims (`shape=`). A model dim registered with a
+  length but no labels is checked by length only. A tz-aware `DatetimeIndex`
+  is compared as a pandas index, so a matching zone is not rejected as naive
+  UTC. An unlabeled `shape=` variable cannot be checked, so reordering the
+  data behind one still replays positionally.
+
+  Breaking for the functional `forecast`: the posterior's in-sample `time`
+  must equal the `data` window. Models built with `predict()` record `mu`
+  (and `expected_observation`) over that window, so forecasting from a later
+  origin with a posterior fitted on an earlier window now raises instead of
+  running; refit on the new window. `Forecaster.forecast` always uses its
+  training data and is unaffected.
 
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the
