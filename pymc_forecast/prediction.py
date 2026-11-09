@@ -237,8 +237,11 @@ def _require_posterior_coords(posterior_ds: xr.Dataset, model: pm.Model) -> None
     dims ``chain`` and ``draw`` are not model coordinates and are ignored.
     ``time`` is compared to the model's in-sample ``time``, never to
     ``time_future``. A model dim with a length but no labels is checked by
-    length only.
+    length only. Labels are compared as pandas indexes: ``np.asarray`` on a
+    tz-aware ``DatetimeIndex`` drops the zone and would reject a match.
     """
+    import pandas as pd
+
     sample_dims = {CHAIN_DIM, DRAW_DIM}
     checked: set[str] = set()
     model_dims = model.named_vars_to_dims
@@ -279,22 +282,25 @@ def _require_posterior_coords(posterior_ds: xr.Dataset, model: pm.Model) -> None
                     )
                     raise AlignmentError(msg)
                 continue
-            expected = np.asarray(labels)
+            # Compare indexes, not ``np.asarray(...values)``. A tz-aware
+            # ``DatetimeIndex`` becomes naive ``datetime64`` through ``.values``,
+            # so it never equals the aware timestamps stored on the model.
+            expected_index = pd.Index(list(labels))
             if dim not in posterior_ds.coords:
                 msg = (
                     f"posterior dim {dim!r} is missing coordinates; "
-                    f"the model labels it {expected.tolist()!r}"
+                    f"the model labels it {expected_index.tolist()!r}"
                 )
                 raise AlignmentError(msg)
-            got = np.asarray(posterior_ds.coords[dim].values)
-            if got.size != len(set(got.tolist())):
-                msg = f"posterior '{dim}' coordinates must be unique, got {got.tolist()!r}"
+            got_index = posterior_ds.get_index(dim)
+            if not got_index.is_unique:
+                msg = f"posterior '{dim}' coordinates must be unique, got {got_index.tolist()!r}"
                 raise AlignmentError(msg)
-            if got.shape != expected.shape or not np.array_equal(got, expected):
+            if not got_index.equals(expected_index):
                 msg = (
                     f"posterior '{dim}' coords must match the model "
-                    f"(same labels, same order): got {got.tolist()!r}, "
-                    f"expected {expected.tolist()!r}"
+                    f"(same labels, same order): got {got_index.tolist()!r}, "
+                    f"expected {expected_index.tolist()!r}"
                 )
                 raise AlignmentError(msg)
 

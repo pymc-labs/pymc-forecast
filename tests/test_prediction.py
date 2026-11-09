@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
 import pytest
@@ -9,6 +10,7 @@ from pymc_forecast.data import TIME_DIM
 from pymc_forecast.exceptions import AlignmentError, HorizonError
 from pymc_forecast.model import ForecastingModel, Horizon, build_model, predict
 from pymc_forecast.prediction import (
+    _require_posterior_coords,
     forecast,
     posterior_dataset,
     predict_in_sample,
@@ -562,3 +564,28 @@ class TestPosteriorCoordAlignment:
         wrong_time = _level_posterior(["a", "b"], [1.0, 10.0], time=[40, 50])
         with pytest.raises(AlignmentError, match="time"):
             forecast(_level_panel, wrong_time, data, cov, random_seed=0)
+
+    def test_tz_aware_datetimeindex_matches_without_dropping_zone(self):
+        # np.asarray on a tz-aware DatetimeIndex drops the zone. The model
+        # stores aware timestamps, so that compare rejected a matching index.
+        idx = pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC")
+        with pm.Model(coords={"time": idx}) as model:
+            pm.Normal("lvl", 0, 1, dims="time")
+
+        def posterior(time):
+            return xr.Dataset(
+                {"lvl": (("chain", "draw", "time"), np.zeros((1, 2, 4)))},
+                coords={"time": time},
+            )
+
+        _require_posterior_coords(posterior(idx), model)
+        _require_posterior_coords(posterior(pd.Index(list(idx), dtype=object)), model)
+        with pytest.raises(AlignmentError, match="time"):
+            _require_posterior_coords(posterior(idx[::-1]), model)
+        with pytest.raises(AlignmentError, match="time"):
+            _require_posterior_coords(posterior(idx + pd.Timedelta(days=1)), model)
+        with pytest.raises(AlignmentError, match="time"):
+            _require_posterior_coords(posterior(idx.tz_localize(None)), model)
+        duplicated = pd.DatetimeIndex([idx[0], idx[0], idx[1], idx[2]])
+        with pytest.raises(AlignmentError, match="unique"):
+            _require_posterior_coords(posterior(duplicated), model)

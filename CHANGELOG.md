@@ -13,7 +13,8 @@ breaking change, made only in a minor release and called out here.
   replaying that posterior positionally and stamping the model's coordinates
   on the result. A posterior that has no coordinate for a labeled model dim is
   rejected too. A model dim registered with a length but no labels is checked
-  by length only.
+  by length only. A tz-aware `DatetimeIndex` is compared as a pandas index,
+  so a matching zone is not rejected as naive UTC.
 
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the
