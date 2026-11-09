@@ -433,3 +433,15 @@ class TestTimezonePreserved:
         assert isinstance(full.get_index("time"), pd.DatetimeIndex)
         assert full.get_index("time").equals(expected)
         np.testing.assert_array_equal(full.values[-2:, 0], [10.0, 11.0])
+
+
+def test_concat_covariates_stamps_future_rows_in_the_training_zone():
+    train = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="Asia/Kolkata")
+    future = pd.date_range("2020-01-11 02:00", periods=2, freq="h", tz="America/New_York")
+    cov = pd.DataFrame({"x": [0.0, 1.0, 2.0]}, index=train)
+    fut = pd.DataFrame({"x": [3.0, 4.0]}, index=future)
+    out = concat_covariates(cov, fut)
+    index = out.indexes["time"]
+    assert str(index.tz) == "Asia/Kolkata"
+    assert index[3:].equals(future.tz_convert("Asia/Kolkata"))
+    np.testing.assert_array_equal(out.values.ravel(), [0.0, 1.0, 2.0, 3.0, 4.0])
