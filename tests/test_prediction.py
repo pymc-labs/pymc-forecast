@@ -507,6 +507,50 @@ class TestPosteriorCoordAlignment:
         with pytest.raises(AlignmentError, match="series"):
             forecast(_level_panel, posterior, data, cov, random_seed=0)
 
+    @staticmethod
+    def _length_only_model(n_k):
+        def model_fn(covariates, data=None):
+            h = Horizon.from_data(covariates, data)
+            m = pm.modelcontext(None)
+            if "k" not in m.coords:
+                m.add_coord("k", length=n_k)  # length only, no labels
+            beta = pm.Normal("beta", 0.0, 1.0, dims="k")
+            predict(h, lambda loc: pm.Normal.dist(loc, 1.0), beta.sum() * pt.ones(h.duration))
+
+        return model_fn
+
+    def _beta_posterior(self, n_k, *, labels=True):
+        coords = {"chain": [0], "draw": [3]}
+        if labels:
+            coords["k"] = list(range(n_k))
+        return xr.Dataset(
+            {"beta": (("chain", "draw", "k"), np.arange(n_k, dtype=float).reshape(1, 1, -1))},
+            coords=coords,
+        )
+
+    @pytest.mark.parametrize("labels", [True, False])
+    def test_length_only_model_dim_is_checked_by_length(self, labels):
+        # Regression: model.coords["k"] is None, so a label comparison rejected
+        # every posterior, including the one pm.sample returns.
+        data = xr.DataArray(np.zeros(4), dims="time", coords={"time": [10, 20, 30, 40]})
+        cov = xr.DataArray(
+            np.zeros((6, 0)), dims=("time", "covariate"), coords={"time": [10, 20, 30, 40, 50, 60]}
+        )
+        model_fn = self._length_only_model(2)
+        posterior = self._beta_posterior(2, labels=labels)
+        predict_in_sample(model_fn, posterior, data, cov.isel(time=slice(0, 4)), random_seed=0)
+        forecast(model_fn, posterior, data, cov, random_seed=0)
+
+    def test_length_only_model_dim_rejects_a_different_length(self):
+        data = xr.DataArray(np.zeros(4), dims="time", coords={"time": [10, 20, 30, 40]})
+        cov = xr.DataArray(
+            np.zeros((4, 0)), dims=("time", "covariate"), coords={"time": [10, 20, 30, 40]}
+        )
+        with pytest.raises(AlignmentError, match="'k' has length 3"):
+            predict_in_sample(
+                self._length_only_model(2), self._beta_posterior(3), data, cov, random_seed=0
+            )
+
     def test_forecast_time_must_match_training_window(self):
         data = _panel(["a", "b"], [10, 20, 30])
         cov = xr.DataArray(

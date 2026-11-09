@@ -11,7 +11,9 @@ breaking change, made only in a minor release and called out here.
 - `predict_in_sample` and `forecast` raise `AlignmentError` when a posterior's
   non-sample coordinates differ in labels or order from the model, instead of
   replaying that posterior positionally and stamping the model's coordinates
-  on the result.
+  on the result. A posterior that has no coordinate for a labeled model dim is
+  rejected too. A model dim registered with a length but no labels is checked
+  by length only.
 
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the
