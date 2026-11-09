@@ -1,0 +1,27 @@
+CHANGELOG.md
+  s_cd6afed62918d5::t_c97d73c48c6bb8 11,19-25
+pymc_forecast/exceptions.py
+  s_cd6afed62918d5::t_fbba84b635d8e4 45-47
+pymc_forecast/forecaster.py
+  s_cd6afed62918d5::t_e3ec6460edd8ad 381-386,485-490
+pymc_forecast/prediction.py
+  s_cd6afed62918d5::t_67ffcc68a5428e 24-25,228-286,310,424-429,515-519
+tests/test_prediction.py
+  s_cd6afed62918d5::t_684beedd4b045f 9-10,370-520
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "f491fdc423ac73a5d1fe8586f1641229af2ae330",
+  "prompts": {},
+  "sessions": {
+    "s_cd6afed62918d5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5d369099-fd74-442a-bf4c-821cf0ab41ad",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "root <root@e2b.local>"
+    }
+  }
+}
