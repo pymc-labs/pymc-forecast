@@ -313,6 +313,30 @@ class TestTimezonePreserved:
         with pytest.raises(AlignmentError, match="timezone-aware"):
             validate_alignment(data, cov)
 
+    def test_non_datetime_beside_aware_is_not_called_naive(self):
+        utc = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
+        data = xr.DataArray(np.arange(3.0), dims="time", coords={"time": utc})
+        integer = xr.DataArray(
+            np.ones((4, 1)),
+            dims=("time", "covariate"),
+            coords={"time": np.arange(4), "covariate": ["x"]},
+        )
+        periods = xr.DataArray(
+            np.ones((4, 1)),
+            dims=("time", "covariate"),
+            coords={"time": pd.period_range("2024-01-01", periods=4, freq="D"), "covariate": ["x"]},
+        )
+        with pytest.raises(AlignmentError, match="misaligned"):
+            validate_alignment(data, integer)
+        with pytest.raises(AlignmentError, match="misaligned"):
+            validate_alignment(data, periods)
+
+    def test_mixed_naive_and_aware_object_index_is_rejected(self):
+        mixed = pd.Index([pd.Timestamp("2024-01-04"), pd.Timestamp("2024-01-05", tz="UTC")])
+        train = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
+        with pytest.raises(AlignmentError, match="mixes timezones"):
+            concat_time_index(train, mixed)
+
     def test_future_in_another_zone_is_converted_to_the_training_zone(self):
         train = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="Asia/Kolkata")
         future = pd.date_range("2020-01-11 02:00", periods=2, freq="h", tz="America/New_York")

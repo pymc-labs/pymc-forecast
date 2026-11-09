@@ -349,3 +349,39 @@ def test_relabel_time_future_ignores_source_index_name():
     raw_int = xr.DataArray(np.ones((1, 1, 2)), dims=("chain", "draw", "time"))
     labeled_int = forecaster._relabel(raw_int, "time_future", integer)
     assert list(labeled_int.get_index("time_future")) == [25, 26]
+
+
+def test_forecast_covariates_in_another_zone_use_the_training_zone():
+    """``forecast(covariates=)`` labels the horizon in the training zone.
+
+    ``future_index`` already converts. This path used to keep the caller's
+    zone after ``validate_alignment`` accepted the same instants.
+    """
+    train = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
+    full = pd.date_range("2024-01-01", periods=5, freq="D", tz="UTC")
+    data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": train})
+    covariates = xr.DataArray(
+        np.zeros((5, 0)),
+        dims=("time", "covariate"),
+        coords={"time": full.tz_convert("Europe/Berlin")},
+    )
+    forecaster = StatespaceForecaster(LocalLevelStatespace())
+    forecaster._data = data
+    forecaster._covariates = xr.DataArray(
+        np.zeros((3, 0)), dims=("time", "covariate"), coords={"time": train}
+    )
+    forecaster._is_fitted = True
+    forecaster.idata = xr.DataTree()
+
+    def fake_forecast(*args, periods, **kwargs):
+        observed = xr.DataArray(np.ones((1, 1, periods)), dims=("chain", "draw", "time"))
+        return xr.Dataset({"forecast_observed": observed, "forecast_latent": observed})
+
+    forecaster.ss_mod = type(
+        "Mod", (), {"data_names": (), "forecast": staticmethod(fake_forecast)}
+    )()
+    forecaster._resolve_posterior = lambda *args, **kwargs: xr.Dataset()
+    tree = forecaster.forecast(covariates, num_samples=1, random_seed=0)
+    observed = tree["predictions"]["forecast"].get_index("time_future")
+    assert isinstance(observed, pd.DatetimeIndex)
+    assert observed.equals(full[3:])

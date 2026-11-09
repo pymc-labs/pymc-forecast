@@ -169,11 +169,47 @@ def as_time_index(index):
     return pd.Index(index)
 
 
+_NOT_DATETIME = object()
+
+
+def _tzinfo_of(value):
+    """Timezone of a datetime-like value, or a sentinel when it is not one."""
+    import datetime as dt
+
+    if isinstance(value, np.datetime64):
+        return None
+    if isinstance(value, dt.datetime):
+        return value.tzinfo
+    return _NOT_DATETIME
+
+
+def _is_naive_datetime(index) -> bool:
+    """True for a timezone-naive datetime index, not an integer or period index."""
+    if getattr(index, "tz", None) is not None:
+        return False
+    if getattr(getattr(index, "dtype", None), "kind", None) == "M":
+        return True
+    if getattr(getattr(index, "dtype", None), "kind", None) != "O":
+        return False
+    import pandas as pd
+
+    saw = False
+    for value in index:
+        if value is None or value is pd.NaT:
+            continue
+        tzinfo = _tzinfo_of(value)
+        if tzinfo is _NOT_DATETIME or tzinfo is not None:
+            return False
+        saw = True
+    return saw
+
+
 def _single_zone(index):
     """Timezone of ``index``, or ``None`` when it has none.
 
-    An object index of timestamps may carry more than one zone. That is not a
-    time index this package can extend or stamp.
+    An object index of timestamps may carry more than one zone, or mix a
+    naive timestamp with an aware one. That is not a time index this package
+    can extend or stamp. Integer and period indexes have no zone.
     """
     tz = getattr(index, "tz", None)
     if tz is not None:
@@ -181,13 +217,23 @@ def _single_zone(index):
     dtype = getattr(index, "dtype", None)
     if dtype is None or dtype.kind != "O":
         return None
+    import pandas as pd
+
     zones = []
+    saw_naive = False
     for value in index:
-        tzinfo = getattr(value, "tzinfo", None)
-        if tzinfo is None or any(tzinfo == existing for existing in zones):
+        if value is None or value is pd.NaT:
+            continue
+        tzinfo = _tzinfo_of(value)
+        if tzinfo is _NOT_DATETIME:
+            continue
+        if tzinfo is None:
+            saw_naive = True
+            continue
+        if any(tzinfo == existing for existing in zones):
             continue
         zones.append(tzinfo)
-    if len(zones) > 1:
+    if len(zones) > 1 or (zones and saw_naive):
         msg = "time index mixes timezones; pass one zone"
         raise AlignmentError(msg)
     return zones[0] if zones else None
@@ -472,10 +518,11 @@ def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
     ------
     pymc_forecast.exceptions.AlignmentError
         If ``covariates`` is shorter than ``data`` along ``"time"``, the leading
-        covariate time coords differ from the data time coords, one time index
-        is timezone-aware and the other is not, a shared non-time dim differs
-        in size or coordinates (or is labeled on one side only), or the surplus
-        time coords are not strictly increasing after training.
+        covariate time coords differ from the data time coords, one datetime
+        index is timezone-aware and the other is timezone-naive, a shared
+        non-time dim differs in size or coordinates (or is labeled on one side
+        only), or the surplus time coords are not strictly increasing after
+        training.
     """
     t_obs = data.sizes[TIME_DIM]
     if covariates.sizes[TIME_DIM] < t_obs:
@@ -488,7 +535,9 @@ def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
     cov_time = as_time_index(covariates)
     data_tz = _single_zone(data_time)
     cov_tz = _single_zone(cov_time)
-    if (data_tz is None) != (cov_tz is None):
+    if (data_tz is None) != (cov_tz is None) and (
+        _is_naive_datetime(data_time) or _is_naive_datetime(cov_time)
+    ):
         msg = (
             f"data '{TIME_DIM}' is timezone-{'aware' if data_tz else 'naive'} but "
             f"covariates '{TIME_DIM}' is timezone-{'aware' if cov_tz else 'naive'}; "

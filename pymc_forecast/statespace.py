@@ -32,6 +32,7 @@ import xarray as xr
 from pymc_forecast.data import (
     FUTURE_DIM,
     TIME_DIM,
+    _common_zone,
     _validate_covariate_structure,
     as_dataarray,
     as_time_index,
@@ -541,6 +542,10 @@ class StatespaceForecaster(HMCForecaster):
                 f"along '{TIME_DIM}', or horizon >= 1"
             )
             raise HorizonError(msg)
+        # ``validate_alignment`` accepts another zone, but this slice is still
+        # the caller's index. Stamp it into the training zone before labeling,
+        # matching ``future_index`` / ``concat_covariates``.
+        _, future_coords = _common_zone(as_time_index(self._data), future_coords)
 
         posterior = self._resolve_posterior(posterior, num_samples, random_seed)
         with warnings.catch_warnings():
