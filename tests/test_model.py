@@ -344,6 +344,172 @@ def test_predict_studentt_dist_logp_matches_named_observation():
     np.testing.assert_allclose(via_predict.compile_logp()({}), via_named.compile_logp()({}))
 
 
+def test_predict_length_duration_vector_is_a_time_effect_on_a_square_panel():
+    time = np.arange(4)
+    series = ["a", "b", "c", "d"]
+    latent = np.array([10.0, 20.0, 30.0, 40.0])
+    y = np.broadcast_to(latent[:, None], (4, 4)).copy()
+    data = xr.DataArray(y, dims=("time", "series"), coords={"time": time, "series": series})
+    h = Horizon(data=data, time=time)
+    coords = {"time": time, "series": series}
+    with pm.Model(coords=coords) as via_predict:
+        predict(
+            h,
+            pm.Normal.dist(0.0, 1.0),
+            pt.as_tensor(latent),
+            expected_observation=pt.as_tensor(latent + 1.0),
+            dims=("series",),
+        )
+        mu = via_predict["mu"].eval()
+        expected = via_predict["expected_observation"].eval()
+    np.testing.assert_array_equal(mu[0], np.full(4, 10.0))
+    np.testing.assert_array_equal(mu, y)
+    np.testing.assert_array_equal(expected, y + 1.0)
+    with pm.Model(coords=coords) as time_effect:
+        pm.Normal("obs", y, 1.0, observed=y, dims=("time", "series"))
+    with pm.Model(coords=coords) as series_effect:
+        pm.Normal(
+            "obs",
+            np.broadcast_to(latent[None, :], (4, 4)),
+            1.0,
+            observed=y,
+            dims=("time", "series"),
+        )
+    got = via_predict.compile_logp()({})
+    np.testing.assert_allclose(got, time_effect.compile_logp()({}))
+    assert not np.allclose(got, series_effect.compile_logp()({}))
+
+
+def test_predict_length_duration_vector_is_constant_across_two_batch_dims():
+    time = np.arange(3)
+    future = np.arange(3, 5)
+    latent = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    data = xr.DataArray(
+        np.zeros((3, 2, 2)),
+        dims=("time", "a", "b"),
+        coords={"time": time, "a": ["a0", "a1"], "b": ["b0", "b1"]},
+    )
+    h = Horizon(data=data, time=time, time_future=future)
+    seen = {}
+
+    def obs(name, mu, dims, observed):
+        seen[name] = mu
+        return pm.Normal(name, mu, 1.0, dims=dims, observed=observed)
+
+    coords = {"time": time, "time_future": future, "a": data.a, "b": data.b}
+    with pm.Model(coords=coords) as model:
+        predict(h, obs, pt.as_tensor(latent), dims=("a", "b"))
+        mu = model["mu"].eval()
+        mu_future = model["mu_future"].eval()
+        forecast_mean = seen["forecast"].eval()
+    assert mu.shape == (3, 2, 2)
+    assert mu_future.shape == (2, 2, 2)
+    np.testing.assert_array_equal(mu[:, 0, 0], latent[:3])
+    np.testing.assert_array_equal(mu, np.broadcast_to(latent[:3, None, None], (3, 2, 2)))
+    np.testing.assert_array_equal(mu_future, np.broadcast_to(latent[3:, None, None], (2, 2, 2)))
+    np.testing.assert_array_equal(forecast_mean, np.broadcast_to(latent[3:, None, None], (2, 2, 2)))
+    h_obs = Horizon(data=data, time=time)
+    with pm.Model(coords=coords) as in_sample:
+        predict(h_obs, pm.Normal.dist(0.0, 1.0), pt.as_tensor(latent[:3]), dims=("a", "b"))
+    with pm.Model(coords=coords) as oracle:
+        pm.Normal(
+            "obs",
+            np.broadcast_to(latent[:3, None, None], (3, 2, 2)),
+            1.0,
+            observed=data.values,
+            dims=("time", "a", "b"),
+        )
+    np.testing.assert_allclose(in_sample.compile_logp()({}), oracle.compile_logp()({}))
+
+
+@pytest.mark.parametrize("n_time", [2, 3])
+def test_predict_time_by_one_latent_is_a_time_effect_over_two_batch_dims(n_time):
+    # (time, 1) with dims ("region", "store"): n_time == n_region used to give a
+    # region effect; otherwise an opaque Alloc broadcast error.
+    time = np.arange(n_time)
+    region = ["r0", "r1"]
+    store = ["s0", "s1", "s2"]
+    data = xr.DataArray(
+        np.zeros((n_time, 2, 3)),
+        dims=("time", "region", "store"),
+        coords={"time": time, "region": region, "store": store},
+    )
+    h = Horizon(data=data, time=time)
+    latent = 10.0 * np.arange(1, n_time + 1)[:, None]
+    expected = np.broadcast_to(latent[:, :, None], (n_time, 2, 3))
+    coords = {"time": time, "region": region, "store": store}
+    with pm.Model(coords=coords) as via_predict:
+        predict(h, pm.Normal.dist(0.0, 1.0), pt.as_tensor(latent), dims=("region", "store"))
+        mu = via_predict["mu"].eval()
+    np.testing.assert_array_equal(mu, expected)
+    with pm.Model(coords=coords) as oracle:
+        pm.Normal("obs", expected, 1.0, observed=data.values, dims=("time", "region", "store"))
+    np.testing.assert_allclose(via_predict.compile_logp()({}), oracle.compile_logp()({}))
+
+
+def test_predict_time_by_first_batch_latent_broadcasts_over_the_last_batch_dim():
+    time = np.arange(3)
+    region = ["r0", "r1"]
+    store = ["s0", "s1", "s2"]
+    data = xr.DataArray(
+        np.zeros((3, 2, 3)),
+        dims=("time", "region", "store"),
+        coords={"time": time, "region": region, "store": store},
+    )
+    h = Horizon(data=data, time=time)
+    latent = np.arange(6.0).reshape(3, 2)  # (time, region)
+    with pm.Model(coords={"time": time, "region": region, "store": store}) as model:
+        predict(h, pm.Normal.dist(0.0, 1.0), pt.as_tensor(latent), dims=("region", "store"))
+        mu = model["mu"].eval()
+    np.testing.assert_array_equal(mu, np.broadcast_to(latent[:, :, None], (3, 2, 3)))
+
+
+@pytest.mark.parametrize("which", ["latent", "expected_observation"])
+def test_predict_rejects_a_zero_d_latent(which):
+    time = np.arange(3)
+    data = xr.DataArray(np.zeros(3), dims="time", coords={"time": time})
+    h = Horizon(data=data, time=time)
+    latent = pt.as_tensor(np.ones(3))
+    kwargs = {"expected_observation": pt.as_tensor(1.0)} if which != "latent" else {}
+    if which == "latent":
+        latent = pt.as_tensor(1.0)
+    with pm.Model(coords={"time": time}), pytest.raises(HorizonError, match="0-d"):
+        predict(h, pm.Normal.dist(0.0, 1.0), latent, **kwargs)
+
+
+def test_predict_univariate_length_duration_latent_is_unchanged():
+    time = np.arange(5)
+    latent = np.array([0.5, -1.0, 2.0, 0.0, 3.0])
+    y = latent + 0.1
+    data = xr.DataArray(y, dims="time", coords={"time": time})
+    h = Horizon(data=data, time=time)
+    with pm.Model(coords={"time": time}) as via_predict:
+        predict(h, pm.Normal.dist(0.0, 1.0), pt.as_tensor(latent))
+        mu = via_predict["mu"].eval()
+    np.testing.assert_array_equal(mu, latent)
+    with pm.Model(coords={"time": time}) as via_named:
+        pm.Normal("obs", latent, 1.0, observed=y, dims="time")
+    np.testing.assert_allclose(via_predict.compile_logp()({}), via_named.compile_logp()({}))
+
+
+def test_predict_time_major_panel_latent_is_not_given_an_extra_dim():
+    time = np.arange(4)
+    series = ["a", "b", "c"]
+    latent = np.arange(12.0).reshape(4, 3)
+    y = latent + 0.25
+    data = xr.DataArray(y, dims=("time", "series"), coords={"time": time, "series": series})
+    h = Horizon(data=data, time=time)
+    coords = {"time": time, "series": series}
+    with pm.Model(coords=coords) as via_predict:
+        predict(h, pm.Normal.dist(0.0, 1.0), pt.as_tensor(latent), dims=("series",))
+        mu = via_predict["mu"].eval()
+    assert mu.shape == (4, 3)
+    np.testing.assert_array_equal(mu, latent)
+    with pm.Model(coords=coords) as via_named:
+        pm.Normal("obs", latent, 1.0, observed=y, dims=("time", "series"))
+    np.testing.assert_allclose(via_predict.compile_logp()({}), via_named.compile_logp()({}))
+
+
 def test_predict_normal_dist_with_symbolic_zero_location_is_shifted():
     time, series = np.arange(5), ["a", "b"]
     y = np.linspace(-1.0, 1.0, 10).reshape(5, 2)

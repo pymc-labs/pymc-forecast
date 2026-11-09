@@ -7,6 +7,13 @@ The dim/coord/group/variable names on prediction outputs (documented in
 breaking change, made only in a minor release and called out here.
 
 ## Unreleased
+- ``predict`` left-aligns a length-``duration`` latent across batch dims. A
+  1-d time effect on a square panel is no longer broadcast as a series effect,
+  so both ``mu`` and the observation log-probability follow the time axis.
+  The same holds for any time-major latent with fewer axes than the panel,
+  such as ``(duration, 1)`` or ``(duration, n_region)`` with
+  ``dims=("region", "store")``. A 0-d latent now raises ``HorizonError``
+  instead of an ``IndexError``.
 
 - Nested ``Prior`` parameters are name-aligned to each segment's dims. A
   hyper-prior dimmed on ``"a"`` no longer trailing-broadcasts onto the last
