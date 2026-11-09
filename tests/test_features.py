@@ -41,6 +41,18 @@ class TestFourierFeatures:
         assert feats.shape == (10, 2)
         np.testing.assert_array_equal(feats["time"].values, np.arange(10))
 
+    def test_numpy_integer_scalar_is_a_phase_not_a_duration(self):
+        # Pins the contract: a NumPy integer (e.g. from mask.sum()) is one phase.
+        feats = fourier_features(np.int64(52), period=52, num_terms=2)
+        assert feats.shape == (1, 4)
+        np.testing.assert_array_equal(feats["time"].values, [52.0])
+        assert fourier_features(int(np.int64(52)), period=52, num_terms=2).shape == (52, 4)
+
+    @pytest.mark.parametrize("time", [True, False, np.bool_(True), np.bool_(False)])
+    def test_boolean_time_is_rejected(self, time):
+        with pytest.raises(TypeError, match="boolean"):
+            fourier_features(time, period=7, num_terms=1)
+
     def test_rank2_positions_are_not_raveled(self):
         with pytest.raises(ValueError):
             fourier_features(np.ones((2, 3)), period=7, num_terms=1)
