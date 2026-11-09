@@ -67,6 +67,21 @@ def _drop_axis_name(index):
 
 _DEFAULT_SECOND_DIM: dict[str, str] = {"data": "series", "covariates": "covariate"}
 
+_RESERVED_DIM_NAMES = frozenset({TIME_DIM, FUTURE_DIM, *_DEFAULT_SECOND_DIM.values()})
+
+
+def _safe_series_name(name):
+    """Return a pandas Series name, or ``None`` if it collides with a dim name.
+
+    A DataArray named like one of its coordinates cannot be turned into a
+    Dataset (``to_dataset`` raises), so a Series called ``"time"`` would fail
+    later, far from where it was built.
+    """
+    if isinstance(name, str) and name in _RESERVED_DIM_NAMES:
+        return None
+    return name
+
+
 Role = Literal["data", "covariates"]
 
 
@@ -77,7 +92,8 @@ def as_dataarray(obj, *, role: Role = "data") -> xr.DataArray:
 
     - ``xarray.DataArray`` with a ``"time"`` dim (transposed time-first);
     - ``pandas.Series`` (index becomes the time coord; a scalar index name is
-      ignored) or ``pandas.DataFrame`` (index → time coord, columns →
+      ignored, and so is a Series name equal to a dim name such as
+      ``"time"``) or ``pandas.DataFrame`` (index → time coord, columns →
       ``"series"``/``"covariate"`` coord; scalar axis names are ignored);
     - 1-d/2-d array-likes converted with ``np.asarray`` (integer-range time
       coord is attached).
@@ -121,7 +137,7 @@ def as_dataarray(obj, *, role: Role = "data") -> xr.DataArray:
                 obj.to_numpy(),
                 dims=(TIME_DIM,),
                 coords={TIME_DIM: _drop_axis_name(obj.index)},
-                name=obj.name,
+                name=_safe_series_name(obj.name),
             )
         elif isinstance(obj, pd.DataFrame):
             da = xr.DataArray(
