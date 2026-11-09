@@ -266,6 +266,37 @@ def _common_zone(reference, other):
     return reference, other
 
 
+_DATETIME_UNITS = ("s", "ms", "us", "ns")
+
+
+def _same_time_labels(left, right) -> bool:
+    """Whether two time indexes hold the same labels.
+
+    Aware indexes are compared as instants (see :func:`_common_zone`), and
+    datetimes are compared independent of their stored resolution: pandas 2
+    ``Index.equals`` is ``False`` for the same days at ``datetime64[s]`` and
+    ``datetime64[ns]``. A naive index is never equal to an aware one.
+
+    Raises
+    ------
+    pymc_forecast.exceptions.AlignmentError
+        If either index mixes timezones.
+    """
+    import pandas as pd
+
+    if (_single_zone(left) is None) != (_single_zone(right) is None):
+        return False
+    left, right = _common_zone(left, right)
+    if (
+        isinstance(left, pd.DatetimeIndex)
+        and isinstance(right, pd.DatetimeIndex)
+        and left.unit != right.unit
+    ):
+        unit = max(left.unit, right.unit, key=_DATETIME_UNITS.index)
+        left, right = left.as_unit(unit), right.as_unit(unit)
+    return left.equals(right)
+
+
 def null_covariates(index) -> xr.DataArray:
     """Zero-width covariates carrying only the time coord.
 
@@ -546,7 +577,7 @@ def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
         )
         raise AlignmentError(msg)
     data_time, cov_time = _common_zone(data_time, cov_time)
-    if not data_time.equals(cov_time[:t_obs]):
+    if not _same_time_labels(data_time, cov_time[:t_obs]):
         msg = (
             f"the first {t_obs} covariate '{TIME_DIM}' coords must equal the data "
             f"'{TIME_DIM}' coords; the arrays are misaligned"

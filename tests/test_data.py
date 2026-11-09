@@ -7,6 +7,7 @@ import pytest
 import xarray as xr
 
 from pymc_forecast.data import (
+    _same_time_labels,
     as_dataarray,
     as_time_index,
     concat_covariates,
@@ -433,6 +434,22 @@ class TestTimezonePreserved:
         assert isinstance(full.get_index("time"), pd.DatetimeIndex)
         assert full.get_index("time").equals(expected)
         np.testing.assert_array_equal(full.values[-2:, 0], [10.0, 11.0])
+
+    @pytest.mark.parametrize("tz", [None, "UTC", "Europe/Berlin"])
+    def test_validate_alignment_ignores_datetime_resolution(self, tz):
+        seconds = pd.date_range("2024-01-01", periods=3, freq="D", unit="s", tz=tz)
+        nanos = pd.date_range("2024-01-01", periods=5, freq="D", unit="ns", tz=tz)
+        if tz is not None:
+            nanos = nanos.tz_convert("UTC")  # same instants, other zone
+        data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": seconds})
+        validate_alignment(data, null_covariates(nanos))
+
+    def test_same_time_labels_naive_vs_aware_is_false(self):
+        naive = pd.date_range("2024-01-01", periods=3, freq="D", unit="s")
+        assert not _same_time_labels(naive, naive.as_unit("ns").tz_localize("UTC"))
+
+    def test_same_time_labels_numeric_matches_array_equal(self):
+        assert _same_time_labels(pd.RangeIndex(3), pd.Index([0.0, 1.0, 2.0]))
 
 
 def test_concat_covariates_stamps_future_rows_in_the_training_zone():

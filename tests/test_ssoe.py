@@ -453,3 +453,12 @@ def test_tz_aware_horizon_keeps_zone_through_ssoe():
     observed = draws["forecast"].get_index("time_future")
     assert isinstance(observed, pd.DatetimeIndex)
     assert observed.equals(future)
+
+
+def test_ssoe_history_ignores_datetime_resolution():
+    seconds = pd.date_range("2024-01-01", periods=3, freq="D", unit="s")
+    future = pd.date_range("2024-01-04", periods=2, freq="D", unit="ns")
+    y = xr.DataArray([1.0, 2.0, 4.0], dims="time", coords={"time": seconds})
+    h = Horizon(y, seconds.as_unit("ns"), future)
+    with pm.Model(coords={"time": h.time, "time_future": h.time_future}):
+        _identity_ssoe(h, pm.Normal.dist())
