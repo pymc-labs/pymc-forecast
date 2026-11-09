@@ -590,6 +590,20 @@ class _Level(ForecastingModel):
         )
 
 
+LOCAL = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="America/Los_Angeles")
+
+
+def _local_data():
+    return xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": LOCAL})
+
+
+def _assert_local_clock(da):
+    index = da.get_index("time")
+    assert isinstance(index, pd.DatetimeIndex)
+    assert index.equals(LOCAL)
+    assert da.sel(time="2020-01-10").sizes["time"] == 2
+
+
 class TestSingleZoneTimeIndex:
     def test_predict_in_sample_keeps_local_clock(self):
         local = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="America/Los_Angeles")
@@ -650,3 +664,20 @@ class TestSingleZoneTimeIndex:
         assert isinstance(cov_index, pd.DatetimeIndex)
         assert cov_index.equals(future)
         assert index_index.equals(future)
+
+    def test_hmc_idata_keeps_datetime_index(self):
+        fc = HMCForecaster(
+            _Level(), _local_data(), draws=10, tune=10, chains=1, random_seed=0, progressbar=False
+        )
+        _assert_local_clock(fc.idata["posterior"]["mu"])
+        _assert_local_clock(fc.idata["observed_data"]["obs"])
+        _assert_local_clock(fc.draw_posterior(2, random_seed=0)["mu"])
+
+    def test_advi_draw_posterior_keeps_datetime_index(self):
+        fc = Forecaster(_Level(), _local_data(), num_steps=5, progressbar=False)
+        _assert_local_clock(fc.draw_posterior(2, random_seed=0)["mu"])
+
+    def test_pathfinder_idata_keeps_datetime_index(self):
+        pytest.importorskip("pymc_extras")
+        fc = PathfinderForecaster(_Level(), _local_data(), random_seed=0, progressbar=False)
+        _assert_local_clock(fc.idata["posterior"]["mu"])
