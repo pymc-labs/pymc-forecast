@@ -428,6 +428,15 @@ def concat_time_index(index, future_index):
     pymc_forecast.exceptions.AlignmentError
         If the future index is empty, not strictly increasing, does not sort
         after the training index, mixes timezones, or cannot be compared to it.
+
+    Notes
+    -----
+    Two timezone-aware indexes are compared as instants, and the future index
+    is relabeled in the training index's zone. A future index built on
+    another zone's calendar can therefore fall off the training grid: UTC
+    midnights appended to ``America/New_York`` daily data become
+    ``19:00-05:00`` the previous evening. To keep the grid, localize the
+    future index in the training zone.
     """
 
     idx = as_time_index(index)
