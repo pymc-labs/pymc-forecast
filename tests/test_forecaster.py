@@ -1,7 +1,9 @@
 import inspect
 import warnings
 
+import arviz as az
 import numpy as np
+import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
 import pytest
@@ -22,7 +24,7 @@ from pymc_forecast.forecaster import (
     HMCForecaster,
     PathfinderForecaster,
 )
-from pymc_forecast.model import Horizon, predict
+from pymc_forecast.model import ForecastingModel, Horizon, predict
 
 SEED = 4242
 
@@ -577,3 +579,111 @@ class TestPathfinderForecaster:
         np.testing.assert_allclose(
             pred["forecast"].mean(("chain", "draw")).values, truth, atol=0.35
         )
+
+
+class _Level(ForecastingModel):
+    def model(self, covariates, data=None):
+        h = Horizon.from_data(covariates, data)
+        predict(
+            h,
+            lambda loc: pm.Normal.dist(loc, 1.0),
+            pm.Normal("level", 0.0, 1.0) * pt.ones(h.duration),
+        )
+
+
+LOCAL = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="America/Los_Angeles")
+
+
+def _local_data():
+    return xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": LOCAL})
+
+
+def _assert_local_clock(da):
+    index = da.get_index("time")
+    assert isinstance(index, pd.DatetimeIndex)
+    assert index.equals(LOCAL)
+    assert da.sel(time="2020-01-10").sizes["time"] == 2
+
+
+class TestSingleZoneTimeIndex:
+    def test_predict_in_sample_keeps_local_clock(self):
+        local = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="America/Los_Angeles")
+        data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": local})
+        fc = Forecaster(_Level(), data, num_steps=5, progressbar=False)
+        assert pd.DatetimeIndex(fc.model.coords["time"]).equals(local)
+        samples = fc.predict_in_sample(num_samples=1, random_seed=0)
+        mu = samples["posterior_predictive"]["mu"]
+        observed = mu.get_index("time")
+        assert isinstance(observed, pd.DatetimeIndex)
+        assert observed.equals(local)
+        assert mu.sel(time="2020-01-10").sizes["time"] == 2
+        assert mu.resample(time="D").mean().sizes["time"] == 2
+
+    @pytest.mark.parametrize("batch_size", [None, 1])
+    def test_forecast_time_future_is_a_datetime_index(self, batch_size):
+        local = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="America/Los_Angeles")
+        data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": local})
+        fc = Forecaster(_Level(), data, num_steps=5, progressbar=False)
+        result = fc.forecast(horizon=2, num_samples=2, random_seed=0, batch_size=batch_size)
+        index = result["predictions"]["forecast"].get_index("time_future")
+        assert isinstance(index, pd.DatetimeIndex)
+        assert index.equals(
+            pd.date_range("2020-01-11 01:00", periods=2, freq="h", tz="America/Los_Angeles")
+        )
+
+    def test_future_index_keeps_utc(self):
+        train = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
+        future = pd.date_range("2024-01-04", periods=2, freq="D", tz="UTC")
+        data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": train})
+        fc = Forecaster(_Level(), data, num_steps=5, progressbar=False)
+        result = fc.forecast(future_index=future, num_samples=1, random_seed=0)
+        assert result["predictions"]["forecast"].get_index("time_future").equals(future)
+
+    def test_horizon_extends_utc(self):
+        train = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
+        data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": train})
+        fc = Forecaster(_Level(), data, num_steps=5, progressbar=False)
+        result = fc.forecast(horizon=2, num_samples=1, random_seed=0)
+        expected = pd.date_range("2024-01-04", periods=2, freq="D", tz="UTC")
+        assert result["predictions"]["forecast"].get_index("time_future").equals(expected)
+
+    def test_future_covariates_in_another_zone_match_future_index(self):
+        train = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
+        future = pd.date_range("2024-01-04", periods=2, freq="D", tz="UTC")
+        berlin = future.tz_convert("Europe/Berlin")
+        data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": train})
+        fc = Forecaster(_Level(), data, num_steps=5, progressbar=False)
+        future_cov = xr.DataArray(
+            np.zeros((len(berlin), 0)),
+            dims=("time", "covariate"),
+            coords={"time": berlin},
+        )
+        by_cov = fc.forecast(future_covariates=future_cov, num_samples=1, random_seed=0)
+        by_index = fc.forecast(future_index=berlin, num_samples=1, random_seed=0)
+        cov_index = by_cov["predictions"]["forecast"].get_index("time_future")
+        index_index = by_index["predictions"]["forecast"].get_index("time_future")
+        assert isinstance(cov_index, pd.DatetimeIndex)
+        assert cov_index.equals(future)
+        assert index_index.equals(future)
+
+    def test_hmc_idata_still_summarizes_with_tz_aware_time(self):
+        fc = HMCForecaster(
+            _Level(), _local_data(), draws=10, tune=10, chains=1, random_seed=0, progressbar=False
+        )
+        # ``level`` plus one ``mu`` row per time step.
+        assert az.summary(fc.idata).shape[0] == 1 + len(LOCAL)
+
+    def test_hmc_draw_posterior_keeps_datetime_index(self):
+        fc = HMCForecaster(
+            _Level(), _local_data(), draws=10, tune=10, chains=1, random_seed=0, progressbar=False
+        )
+        _assert_local_clock(fc.draw_posterior(2, random_seed=0)["mu"])
+
+    def test_advi_draw_posterior_keeps_datetime_index(self):
+        fc = Forecaster(_Level(), _local_data(), num_steps=5, progressbar=False)
+        _assert_local_clock(fc.draw_posterior(2, random_seed=0)["mu"])
+
+    def test_pathfinder_draw_posterior_keeps_datetime_index(self):
+        pytest.importorskip("pymc_extras")
+        fc = PathfinderForecaster(_Level(), _local_data(), random_seed=0, progressbar=False)
+        _assert_local_clock(fc.draw_posterior(2, random_seed=0)["mu"])

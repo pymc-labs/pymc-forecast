@@ -23,10 +23,10 @@ import numpy as np
 import pymc as pm
 import xarray as xr
 
-from pymc_forecast.data import TIME_DIM, as_dataarray, null_covariates
+from pymc_forecast.data import TIME_DIM, as_dataarray, as_time_index, null_covariates
 from pymc_forecast.exceptions import HorizonError, MethodResolutionError, OptionalDependencyError
 from pymc_forecast.model import FORECAST_VAR, build_model
-from pymc_forecast.prediction import posterior_dataset, thin_draws
+from pymc_forecast.prediction import _aware_time_index, posterior_dataset, thin_draws
 
 __all__ = ["FitResult", "draw_posterior", "fit_mcmc", "fit_pathfinder", "fit_vi"]
 
@@ -159,7 +159,7 @@ def _training_inputs(data, covariates) -> tuple[xr.DataArray, xr.DataArray]:
     """
     data_da = as_dataarray(data, role="data")
     if covariates is None:
-        return data_da, null_covariates(data_da[TIME_DIM].values)
+        return data_da, null_covariates(as_time_index(data_da))
     cov_da = as_dataarray(covariates, role="covariates")
     return data_da, cov_da.isel({TIME_DIM: slice(None, data_da.sizes[TIME_DIM])})
 
@@ -497,7 +497,7 @@ def fit_pathfinder(
 def _draw_once(result: FitResult, num_samples: int, random_seed=None) -> xr.Dataset:
     if result.idata is None:
         idata = result.approx.sample(draws=num_samples, random_seed=random_seed)
-        return posterior_dataset(idata)
+        return _aware_time_index(posterior_dataset(idata))
     return thin_draws(result.idata, num_samples, random_seed)
 
 

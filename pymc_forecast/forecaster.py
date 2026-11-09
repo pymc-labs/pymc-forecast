@@ -18,6 +18,7 @@ from pymc_forecast.data import (
     TIME_DIM,
     _validate_covariate_structure,
     as_dataarray,
+    as_time_index,
     concat_covariates,
     concat_time_index,
     extend_time_index,
@@ -39,12 +40,13 @@ from pymc_forecast.fit import (
 )
 from pymc_forecast.model import build_model
 from pymc_forecast.prediction import (
-    forecast as _forecast,
-)
-from pymc_forecast.prediction import (
+    _aware_time_index,
     posterior_dataset,
     predict_in_sample,
     thin_draws,
+)
+from pymc_forecast.prediction import (
+    forecast as _forecast,
 )
 
 __all__ = ["Forecaster", "HMCForecaster", "PathfinderForecaster"]
@@ -407,7 +409,7 @@ class BaseForecaster(abc.ABC):
             if horizon is not None:
                 full_index = extend_time_index(self._data.get_index(TIME_DIM), horizon)
             else:
-                full_index = concat_time_index(self._data[TIME_DIM].values, future_index)
+                full_index = concat_time_index(as_time_index(self._data), future_index)
             covariates = null_covariates(full_index)
         elif future_covariates is not None:
             covariates = concat_covariates(self._covariates, future_covariates)
@@ -640,7 +642,7 @@ class Forecaster(BaseForecaster):
     def _draw_posterior(self, num_samples: int, random_seed=None) -> xr.Dataset:
         """Draw ``num_samples`` posterior samples from the approximation."""
         idata = self.approx.sample(draws=num_samples, random_seed=random_seed)
-        return posterior_dataset(idata)
+        return _aware_time_index(posterior_dataset(idata))
 
 
 class HMCForecaster(BaseForecaster):

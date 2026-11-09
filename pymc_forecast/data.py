@@ -23,6 +23,7 @@ __all__ = [
     "SAMPLE_DIMS",
     "TIME_DIM",
     "as_dataarray",
+    "as_time_index",
     "concat_covariates",
     "concat_time_index",
     "extend_time_index",
@@ -172,6 +173,179 @@ def as_dataarray(obj, *, role: Role = "data") -> xr.DataArray:
     return da
 
 
+def as_time_index(index):
+    """Return a pandas Index without dropping a timezone.
+
+    ``np.asarray`` and ``DataArray.values`` turn a timezone-aware
+    ``DatetimeIndex`` into naive UTC and shift the clock (``22:00`` in
+    ``America/Los_Angeles`` becomes ``06:00`` the next day). This helper
+    reads a ``DataArray``'s ``"time"`` index with ``get_index`` and returns
+    a ``pandas.Index`` unchanged. A bare array is wrapped with ``pd.Index``
+    only when it is not already an index — never via ``np.asarray`` on a
+    timezone-aware index.
+
+    Parameters
+    ----------
+    index : pandas.Index, xarray.DataArray or array_like
+        A time index, or an array with a ``"time"`` dimension.
+
+    Returns
+    -------
+    pandas.Index
+        The time index, timezone included when the input had one.
+
+    Raises
+    ------
+    pymc_forecast.exceptions.AlignmentError
+        If ``index`` is a ``DataArray`` with no ``"time"`` index.
+    """
+    import pandas as pd
+
+    if isinstance(index, xr.DataArray):
+        try:
+            return index.get_index(TIME_DIM)
+        except KeyError as err:
+            msg = f"as_time_index requires a '{TIME_DIM}' index; got dims {index.dims}"
+            raise AlignmentError(msg) from err
+    if isinstance(index, pd.Index):
+        return index
+    return pd.Index(index)
+
+
+_NOT_DATETIME = object()
+
+
+def _tzinfo_of(value):
+    """Timezone of a datetime-like value, or a sentinel when it is not one."""
+    import datetime as dt
+
+    if isinstance(value, np.datetime64):
+        return None
+    if isinstance(value, dt.datetime):
+        return value.tzinfo
+    return _NOT_DATETIME
+
+
+def _is_naive_datetime(index) -> bool:
+    """True for a timezone-naive datetime index, not an integer or period index."""
+    if getattr(index, "tz", None) is not None:
+        return False
+    if getattr(getattr(index, "dtype", None), "kind", None) == "M":
+        return True
+    if getattr(getattr(index, "dtype", None), "kind", None) != "O":
+        return False
+    import pandas as pd
+
+    saw = False
+    for value in index:
+        if value is None or value is pd.NaT:
+            continue
+        tzinfo = _tzinfo_of(value)
+        if tzinfo is _NOT_DATETIME or tzinfo is not None:
+            return False
+        saw = True
+    return saw
+
+
+def _single_zone(index):
+    """Timezone of ``index``, or ``None`` when it has none.
+
+    An object index of timestamps may carry more than one zone, or mix a
+    naive timestamp with an aware one. That is not a time index this package
+    can extend or stamp. Integer and period indexes have no zone.
+    """
+    tz = getattr(index, "tz", None)
+    if tz is not None:
+        return tz
+    dtype = getattr(index, "dtype", None)
+    if dtype is None or dtype.kind != "O":
+        return None
+    import pandas as pd
+
+    msg = "time index mixes timezones; pass one zone"
+    aware = []
+    saw_naive = False
+    for value in index:
+        if value is None or value is pd.NaT:
+            continue
+        tzinfo = _tzinfo_of(value)
+        if tzinfo is _NOT_DATETIME:
+            continue
+        if tzinfo is None:
+            saw_naive = True
+        else:
+            aware.append(value)
+    if not aware:
+        return None
+    if saw_naive:
+        raise AlignmentError(msg)
+    # Let pandas decide whether the values share one zone: tzinfo objects of
+    # one zone can compare unequal (``ZoneInfo("UTC")`` vs ``datetime.UTC``,
+    # pytz's per-offset EST/EDT instances), and pandas rejects real mixes.
+    try:
+        return pd.DatetimeIndex(aware).tz
+    except (TypeError, ValueError) as err:
+        raise AlignmentError(msg) from err
+
+
+def _common_zone(reference, other):
+    """Express ``other`` in ``reference``'s timezone when both are aware.
+
+    Two aware indexes are compared as instants: ``other`` is converted to the
+    reference zone, so the same zone from different tz libraries (``pytz``,
+    ``zoneinfo``, ``dateutil``, ``datetime.timezone.utc``) and a different zone
+    holding the same instants both line up. Zone objects are never compared
+    with ``==``, since aliases of one zone compare unequal. A naive index next
+    to an aware one is returned unchanged; comparing them fails later with the
+    usual not-comparable error.
+
+    Raises
+    ------
+    pymc_forecast.exceptions.AlignmentError
+        If either index mixes timezones.
+    """
+    import pandas as pd
+
+    ref_tz = _single_zone(reference)
+    other_tz = _single_zone(other)
+    if ref_tz is None or other_tz is None:
+        return reference, other
+    reference = pd.DatetimeIndex(reference)
+    other = pd.DatetimeIndex(other).tz_convert(reference.tz)
+    return reference, other
+
+
+_DATETIME_UNITS = ("s", "ms", "us", "ns")
+
+
+def _same_time_labels(left, right) -> bool:
+    """Whether two time indexes hold the same labels.
+
+    Aware indexes are compared as instants (see :func:`_common_zone`), and
+    datetimes are compared independent of their stored resolution: pandas 2
+    ``Index.equals`` is ``False`` for the same days at ``datetime64[s]`` and
+    ``datetime64[ns]``. A naive index is never equal to an aware one.
+
+    Raises
+    ------
+    pymc_forecast.exceptions.AlignmentError
+        If either index mixes timezones.
+    """
+    import pandas as pd
+
+    if (_single_zone(left) is None) != (_single_zone(right) is None):
+        return False
+    left, right = _common_zone(left, right)
+    if (
+        isinstance(left, pd.DatetimeIndex)
+        and isinstance(right, pd.DatetimeIndex)
+        and left.unit != right.unit
+    ):
+        unit = max(left.unit, right.unit, key=_DATETIME_UNITS.index)
+        left, right = left.as_unit(unit), right.as_unit(unit)
+    return left.equals(right)
+
+
 def null_covariates(index) -> xr.DataArray:
     """Zero-width covariates carrying only the time coord.
 
@@ -191,7 +365,7 @@ def null_covariates(index) -> xr.DataArray:
         Zeros of shape ``(len(index), 0)`` with dims ``("time", "covariate")``
         and only a ``"time"`` coord.
     """
-    index = np.asarray(index)
+    index = as_time_index(index)
     return xr.DataArray(
         np.zeros((len(index), 0)),
         dims=(TIME_DIM, _DEFAULT_SECOND_DIM["covariates"]),
@@ -235,7 +409,7 @@ def extend_time_index(index, horizon: int):
     if isinstance(horizon, bool) or not isinstance(horizon, Integral) or horizon < 0:
         msg = f"horizon must be a non-negative integer, got {horizon}"
         raise AlignmentError(msg)
-    idx = pd.Index(index)
+    idx = as_time_index(index)
     if horizon == 0:
         return idx
     if len(idx) == 0 or not (idx.is_monotonic_increasing and idx.is_unique):
@@ -296,15 +470,24 @@ def concat_time_index(index, future_index):
     ------
     pymc_forecast.exceptions.AlignmentError
         If the future index is empty, not strictly increasing, does not sort
-        after the training index, or cannot be compared to it.
-    """
-    import pandas as pd
+        after the training index, mixes timezones, or cannot be compared to it.
 
-    idx = pd.Index(np.asarray(index))
-    fut = pd.Index(np.asarray(future_index))
+    Notes
+    -----
+    Two timezone-aware indexes are compared as instants, and the future index
+    is relabeled in the training index's zone. A future index built on
+    another zone's calendar can therefore fall off the training grid: UTC
+    midnights appended to ``America/New_York`` daily data become
+    ``19:00-05:00`` the previous evening. To keep the grid, localize the
+    future index in the training zone.
+    """
+
+    idx = as_time_index(index)
+    fut = as_time_index(future_index)
     if len(fut) == 0:
         msg = "future time index is empty; supply at least one forecast step"
         raise AlignmentError(msg)
+    idx, fut = _common_zone(idx, fut)
     if not (fut.is_monotonic_increasing and fut.is_unique):
         msg = "future time index must be strictly increasing"
         raise AlignmentError(msg)
@@ -355,12 +538,20 @@ def concat_covariates(covariates, future_covariates) -> xr.DataArray:
     pymc_forecast.exceptions.AlignmentError
         If an input cannot be normalized, the future time index does not
         extend the training window, or the dims (including their order),
-        sizes, or coordinates of the non-time dims differ.
+        sizes, or coordinates of the non-time dims differ. A naive index
+        beside an aware one is not comparable. An aware future index in
+        another zone is not an error: it is stamped in the training zone
+        before concatenation, same as :func:`concat_time_index`.
     """
     covariates = as_dataarray(covariates, role="covariates")
     fut = as_dataarray(future_covariates, role="covariates")
     _validate_covariate_structure(covariates, fut)
-    concat_time_index(covariates[TIME_DIM].values, fut[TIME_DIM].values)
+    full = concat_time_index(as_time_index(covariates), as_time_index(fut))
+    # Stamp both pieces with the validated index, so a future block in another
+    # zone (or the same zone from another tz library) lands on the training clock.
+    t_obs = covariates.sizes[TIME_DIM]
+    covariates = covariates.assign_coords({TIME_DIM: full[:t_obs]})
+    fut = fut.assign_coords({TIME_DIM: full[t_obs:]})
     return xr.concat([covariates, fut], dim=TIME_DIM, join="exact")
 
 
@@ -417,7 +608,8 @@ def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
     ------
     pymc_forecast.exceptions.AlignmentError
         If ``covariates`` is shorter than ``data`` along ``"time"``, the leading
-        covariate time coords differ from the data time coords, a shared
+        covariate time coords differ from the data time coords, one datetime
+        index is timezone-aware and the other is timezone-naive, a shared
         non-time dim differs in size or coordinates (or is labeled on one side
         only), or the surplus time coords are not strictly increasing after
         training.
@@ -429,8 +621,21 @@ def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
             f"{covariates.sizes[TIME_DIM]} covariate steps < {t_obs} data steps"
         )
         raise AlignmentError(msg)
-    cov_prefix = covariates[TIME_DIM].values[:t_obs]
-    if not np.array_equal(cov_prefix, data[TIME_DIM].values):
+    data_time = as_time_index(data)
+    cov_time = as_time_index(covariates)
+    data_tz = _single_zone(data_time)
+    cov_tz = _single_zone(cov_time)
+    if (data_tz is None) != (cov_tz is None) and (
+        _is_naive_datetime(data_time) or _is_naive_datetime(cov_time)
+    ):
+        msg = (
+            f"data '{TIME_DIM}' is timezone-{'aware' if data_tz else 'naive'} but "
+            f"covariates '{TIME_DIM}' is timezone-{'aware' if cov_tz else 'naive'}; "
+            "localize both to one zone"
+        )
+        raise AlignmentError(msg)
+    data_time, cov_time = _common_zone(data_time, cov_time)
+    if not _same_time_labels(data_time, cov_time[:t_obs]):
         msg = (
             f"the first {t_obs} covariate '{TIME_DIM}' coords must equal the data "
             f"'{TIME_DIM}' coords; the arrays are misaligned"
@@ -438,4 +643,4 @@ def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
         raise AlignmentError(msg)
     _validate_shared_coords(data, covariates, context="data and covariates")
     if covariates.sizes[TIME_DIM] > t_obs:
-        concat_time_index(data[TIME_DIM].values, covariates[TIME_DIM].values[t_obs:])
+        concat_time_index(data_time, cov_time[t_obs:])

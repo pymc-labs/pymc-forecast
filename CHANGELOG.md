@@ -59,6 +59,35 @@ breaking change, made only in a minor release and called out here.
   running; refit on the new window. `Forecaster.forecast` always uses its
   training data and is unaffected.
 
+- Keep a single-zone time index's timezone and clock. Time helpers, model
+  coords, and forecast outputs no longer rebuild a timezone-aware
+  ``DatetimeIndex`` through ``np.asarray`` or ``.values``, which shifted the
+  clock to naive UTC and made later comparisons raise ``AlignmentError``.
+  Two aware indexes are compared as instants: a future index or covariates in
+  another zone (or the same zone from another tz library, e.g. ``zoneinfo``
+  versus ``pytz``) are converted to the training data's zone instead of
+  becoming an object index. A future index built on another zone's calendar
+  can land off the training grid (UTC midnights on New York daily data become
+  ``19:00-05:00``); localize it in the training zone to keep the grid.
+  ``forecast(future_covariates=)`` uses that converted index, so a future
+  covariate frame in another zone no longer crashes inside
+  ``xarray.concat``. A naive index beside an aware one used
+  to match after the zone was stripped to naive UTC; it now raises
+  ``AlignmentError`` telling you to localize both sides, instead of being
+  reported as a generic misalignment. Time coords are compared independent
+  of datetime resolution, so data at ``datetime64[s]`` aligns with
+  covariates at ``datetime64[ns]`` on pandas 2 too. Prediction outputs and
+  posterior draws (every ``draw_posterior`` result) carry
+  ``time``/``time_future`` as a tz-aware ``DatetimeIndex``, so ``.sel`` by
+  date string and ``.resample`` work. ``FitResult.idata`` keeps the object
+  index PyMC returns, because ArviZ summaries and plots reject a tz-aware
+  ``DatetimeIndex`` coord.
+  Statespace ``forecast`` stamps ``time_future`` without treating the
+  training index name ``"time"`` as that dimension.
+- Breaking: ``Horizon.from_data`` stores ``time``/``time_future`` as a
+  ``pandas.Index`` (timezone included) instead of a ``numpy.ndarray``. Model
+  code that applies ndarray-only operations to them (e.g. ``h.time[:, None]``)
+  should call ``np.asarray`` first, which drops the timezone.
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the
   fixed height. `docs/_static/custom.css` sets `height: auto` on cell-output

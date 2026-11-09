@@ -21,7 +21,16 @@ import numpy as np
 import pymc as pm
 import xarray as xr
 
-from pymc_forecast.data import CHAIN_DIM, DRAW_DIM, TIME_DIM, as_dataarray, null_covariates
+from pymc_forecast.data import (
+    CHAIN_DIM,
+    DRAW_DIM,
+    FUTURE_DIM,
+    TIME_DIM,
+    _single_zone,
+    as_dataarray,
+    as_time_index,
+    null_covariates,
+)
 from pymc_forecast.exceptions import AlignmentError, HorizonError
 from pymc_forecast.model import (
     EXPECTED_OBSERVATION_FORECAST_VAR,
@@ -161,7 +170,7 @@ def thin_draws(posterior, num_samples: int, random_seed=None) -> xr.Dataset:
     total = ds.sizes["__sample__"]
     rng = np.random.default_rng(random_seed)
     index = rng.choice(total, size=num_samples, replace=num_samples > total)
-    return (
+    return _aware_time_index(
         ds.isel(__sample__=index)
         .reset_index("__sample__")
         .drop_vars(["chain", "draw"], errors="ignore")
@@ -170,6 +179,31 @@ def thin_draws(posterior, num_samples: int, random_seed=None) -> xr.Dataset:
         .expand_dims(chain=[0])
         .transpose("chain", "draw", ...)
     )
+
+
+def _aware_time_index(ds: xr.Dataset) -> xr.Dataset:
+    """Restamp an object ``time``/``time_future`` index of one-zone timestamps.
+
+    A fitted posterior keeps tz-aware time coords as an object ``Index`` of
+    ``Timestamp``s (PyMC stores model coords as tuples). Draws handed to users
+    get a ``DatetimeIndex`` instead, so ``.sel`` by date string and
+    ``.resample`` work. The fit ``idata`` itself is left as PyMC returns it:
+    ArviZ summaries and plots reject a tz-aware ``DatetimeIndex`` coord.
+    """
+    import pandas as pd
+
+    stamps = {}
+    for dim in (TIME_DIM, FUTURE_DIM):
+        if dim not in ds.indexes or ds.indexes[dim].dtype != object:
+            continue
+        index = ds.indexes[dim]
+        try:
+            if _single_zone(index) is None:
+                continue
+            stamps[dim] = pd.DatetimeIndex(list(index))
+        except (AlignmentError, TypeError, ValueError):
+            continue  # mixed zones or non-datetime labels: leave as is
+    return ds.assign_coords(stamps) if stamps else ds
 
 
 def _chunk_seeds(random_seed, num_chunks: int) -> list:
@@ -223,6 +257,43 @@ def _concat_draw_chunks(chunks: list):
         tree.attrs.update(template.attrs)
         return tree
     return type(template)(**groups)
+
+
+def _restore_time_index(result, model: pm.Model):
+    """Restamp tz-aware ``time``/``time_future`` coords as a ``DatetimeIndex``.
+
+    PyMC stores model coords as tuples, and a tuple of tz-aware ``Timestamp``
+    objects comes back from sampling as an object-dtype ``Index``. The clock
+    is right but ``.dt``, partial-string ``.sel`` and ``.resample`` fail on it.
+    Rebuild the index from the model's labels. Naive datetime and non-datetime
+    coords already round-trip and are left alone.
+    """
+    import pandas as pd
+
+    stamps = {}
+    for dim in (TIME_DIM, FUTURE_DIM):
+        labels = model.coords.get(dim)
+        if not labels or not all(isinstance(value, pd.Timestamp) for value in labels):
+            continue
+        if all(value.tzinfo is None for value in labels):
+            continue
+        try:
+            stamps[dim] = pd.DatetimeIndex(list(labels))
+        except (TypeError, ValueError):
+            continue  # mixed zones: leave the object index as PyMC returned it
+    if not stamps:
+        return result
+
+    def restamp(ds: xr.Dataset) -> xr.Dataset:
+        present = {dim: index for dim, index in stamps.items() if dim in ds.dims}
+        return ds.assign_coords(present) if present else ds
+
+    if isinstance(result, xr.DataTree):
+        return result.map_over_datasets(restamp)
+    if isinstance(result, xr.Dataset):
+        return restamp(result)
+    groups = {name: restamp(ds) for name, ds in _group_datasets(result).items()}
+    return type(result)(**groups)
 
 
 def _require_posterior_coords(posterior_ds: xr.Dataset, model: pm.Model) -> None:
@@ -349,7 +420,8 @@ def _sample_predictive(
         kwargs["predictions"] = True
     num_draws = posterior_ds.sizes[DRAW_DIM]
     if batch_size is None or num_draws <= batch_size:
-        return pm.sample_posterior_predictive(posterior_ds, random_seed=random_seed, **kwargs)
+        result = pm.sample_posterior_predictive(posterior_ds, random_seed=random_seed, **kwargs)
+        return _restore_time_index(result, model)
     # Materialize implicit draw indices before slicing, otherwise PyMC starts
     # a new zero-based index in each batch of an unlabeled posterior Dataset.
     if DRAW_DIM not in posterior_ds.coords:
@@ -364,7 +436,7 @@ def _sample_predictive(
         )
         for start, seed in zip(starts, seeds, strict=True)
     ]
-    return _concat_draw_chunks(chunks)
+    return _restore_time_index(_concat_draw_chunks(chunks), model)
 
 
 def _default_var_names(model: pm.Model) -> list[str]:
@@ -568,7 +640,7 @@ def predict_in_sample(
     """
     data_da = as_dataarray(data, role="data")
     if covariates is None:
-        cov_da = null_covariates(data_da[TIME_DIM].values)
+        cov_da = null_covariates(as_time_index(data_da))
     else:
         cov_da = as_dataarray(covariates, role="covariates")
         cov_da = cov_da.isel({TIME_DIM: slice(None, data_da.sizes[TIME_DIM])})
