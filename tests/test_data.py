@@ -414,6 +414,19 @@ class TestTimezonePreserved:
         with pytest.raises(AlignmentError, match="mixes timezones"):
             concat_time_index(train, mixed)
 
+    def test_object_index_of_one_zone_from_two_libraries_is_one_zone(self):
+        train = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
+        future = pd.Index(
+            [
+                pd.Timestamp("2024-01-04", tz=zoneinfo.ZoneInfo("UTC")),
+                pd.Timestamp("2024-01-05", tz=dt.UTC),
+            ],
+            dtype=object,
+        )
+        full = concat_time_index(train, future)
+        assert full.tz == train.tz
+        assert list(full[3:]) == list(future)
+
     def test_future_covariates_in_another_zone_use_the_training_zone(self):
         utc = pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC")
         berlin = pd.date_range("2024-01-05", periods=2, freq="D", tz="UTC").tz_convert(

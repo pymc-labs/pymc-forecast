@@ -219,7 +219,8 @@ def _single_zone(index):
         return None
     import pandas as pd
 
-    zones = []
+    msg = "time index mixes timezones; pass one zone"
+    aware = []
     saw_naive = False
     for value in index:
         if value is None or value is pd.NaT:
@@ -229,14 +230,19 @@ def _single_zone(index):
             continue
         if tzinfo is None:
             saw_naive = True
-            continue
-        if any(tzinfo == existing for existing in zones):
-            continue
-        zones.append(tzinfo)
-    if len(zones) > 1 or (zones and saw_naive):
-        msg = "time index mixes timezones; pass one zone"
+        else:
+            aware.append(value)
+    if not aware:
+        return None
+    if saw_naive:
         raise AlignmentError(msg)
-    return zones[0] if zones else None
+    # Let pandas decide whether the values share one zone: tzinfo objects of
+    # one zone can compare unequal (``ZoneInfo("UTC")`` vs ``datetime.UTC``,
+    # pytz's per-offset EST/EDT instances), and pandas rejects real mixes.
+    try:
+        return pd.DatetimeIndex(aware).tz
+    except (TypeError, ValueError) as err:
+        raise AlignmentError(msg) from err
 
 
 def _common_zone(reference, other):
