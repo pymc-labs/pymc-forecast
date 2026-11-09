@@ -295,11 +295,23 @@ class TestTimezonePreserved:
             concat_time_index(naive, aware)
         data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": naive})
         cov = null_covariates(naive.append(pd.date_range("2024-01-04", periods=2, freq="D")))
-        # A timezone-aware prefix of the same clock must not compare equal.
+        # Same wall-clock values in UTC are not the naive index. Do not call
+        # that a misalignment, and do not treat the zone as UTC.
         aware_prefix = null_covariates(pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC"))
-        with pytest.raises(AlignmentError, match="misaligned"):
+        with pytest.raises(AlignmentError, match="localize both to one zone"):
             validate_alignment(data, aware_prefix)
         validate_alignment(data, cov)
+
+    def test_aware_data_with_naive_covariates_names_the_mismatch(self):
+        utc = pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC")
+        data = xr.DataArray(np.arange(4.0), dims="time", coords={"time": utc})
+        cov = xr.DataArray(
+            np.ones((4, 1)),
+            dims=("time", "covariate"),
+            coords={"time": utc.tz_localize(None), "covariate": ["x"]},
+        )
+        with pytest.raises(AlignmentError, match="timezone-aware"):
+            validate_alignment(data, cov)
 
     def test_future_in_another_zone_is_converted_to_the_training_zone(self):
         train = pd.date_range("2020-01-10 22:00", periods=3, freq="h", tz="Asia/Kolkata")
@@ -320,8 +332,18 @@ class TestTimezonePreserved:
         ],
     )
     def test_same_zone_from_different_tz_libraries_is_accepted(self, train_tz, future_tz):
-        train = pd.date_range("2024-01-01", periods=3, freq="D", tz=train_tz)
-        future = pd.date_range("2024-01-04", periods=2, freq="D", tz=future_tz)
+        def build(start, periods, tz):
+            try:
+                return pd.date_range(start, periods=periods, freq="D", tz=tz)
+            except AttributeError as err:
+                # pandas 3.0.6 + dateutil 4, and some 3.1.0 builds, raise
+                # inside date_range before this package is called.
+                if "dateutil" not in str(tz):
+                    raise
+                pytest.skip(f"pandas cannot localize {tz!r}: {err}")
+
+        train = build("2024-01-01", 3, train_tz)
+        future = build("2024-01-04", 2, future_tz)
         full = concat_time_index(train, future)
         assert full.tz == train.tz
         assert list(full) == list(train) + list(future)
@@ -366,3 +388,24 @@ class TestTimezonePreserved:
         )
         with pytest.raises(AlignmentError, match="mixes timezones"):
             concat_time_index(train, mixed)
+
+    def test_future_covariates_in_another_zone_use_the_training_zone(self):
+        utc = pd.date_range("2024-01-01", periods=4, freq="D", tz="UTC")
+        berlin = pd.date_range("2024-01-05", periods=2, freq="D", tz="UTC").tz_convert(
+            "Europe/Berlin"
+        )
+        train = xr.DataArray(
+            np.arange(4.0)[:, None],
+            dims=("time", "covariate"),
+            coords={"time": utc, "covariate": ["x"]},
+        )
+        fut = xr.DataArray(
+            np.array([[10.0], [11.0]]),
+            dims=("time", "covariate"),
+            coords={"time": berlin, "covariate": ["x"]},
+        )
+        full = concat_covariates(train, fut)
+        expected = utc.append(berlin.tz_convert("UTC"))
+        assert isinstance(full.get_index("time"), pd.DatetimeIndex)
+        assert full.get_index("time").equals(expected)
+        np.testing.assert_array_equal(full.values[-2:, 0], [10.0, 11.0])

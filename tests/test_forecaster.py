@@ -631,3 +631,22 @@ class TestSingleZoneTimeIndex:
         result = fc.forecast(horizon=2, num_samples=1, random_seed=0)
         expected = pd.date_range("2024-01-04", periods=2, freq="D", tz="UTC")
         assert result["predictions"]["forecast"].get_index("time_future").equals(expected)
+
+    def test_future_covariates_in_another_zone_match_future_index(self):
+        train = pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")
+        future = pd.date_range("2024-01-04", periods=2, freq="D", tz="UTC")
+        berlin = future.tz_convert("Europe/Berlin")
+        data = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": train})
+        fc = Forecaster(_Level(), data, num_steps=5, progressbar=False)
+        future_cov = xr.DataArray(
+            np.zeros((len(berlin), 0)),
+            dims=("time", "covariate"),
+            coords={"time": berlin},
+        )
+        by_cov = fc.forecast(future_covariates=future_cov, num_samples=1, random_seed=0)
+        by_index = fc.forecast(future_index=berlin, num_samples=1, random_seed=0)
+        cov_index = by_cov["predictions"]["forecast"].get_index("time_future")
+        index_index = by_index["predictions"]["forecast"].get_index("time_future")
+        assert isinstance(cov_index, pd.DatetimeIndex)
+        assert cov_index.equals(future)
+        assert index_index.equals(future)

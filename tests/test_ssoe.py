@@ -450,4 +450,6 @@ def test_tz_aware_horizon_keeps_zone_through_ssoe():
     assert pd.DatetimeIndex(model.coords["time"]).tz == index.tz
     assert list(pd.DatetimeIndex(model.coords["time"])) == list(index)
     draws = forecast(arma, fixed_posterior(2), data, covariates, random_seed=1).predictions
-    assert pd.DatetimeIndex(draws.time_future.values).equals(future)
+    observed = draws["forecast"].get_index("time_future")
+    assert isinstance(observed, pd.DatetimeIndex)
+    assert observed.equals(future)

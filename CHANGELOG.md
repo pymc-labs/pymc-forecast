@@ -15,10 +15,16 @@ breaking change, made only in a minor release and called out here.
   Two aware indexes are compared as instants: a future index or covariates in
   another zone (or the same zone from another tz library, e.g. ``zoneinfo``
   versus ``pytz``) are converted to the training data's zone instead of
-  becoming an object index. Prediction outputs carry ``time``/``time_future``
-  as a tz-aware ``DatetimeIndex``, so ``.sel`` by date string and
-  ``.resample`` work. Statespace ``forecast`` stamps ``time_future``
-  without treating the training index name ``"time"`` as that dimension.
+  becoming an object index. ``forecast(future_covariates=)`` uses that
+  converted index, so a future covariate frame in another zone no longer
+  crashes inside ``xarray.concat``. A naive index beside an aware one used
+  to match after the zone was stripped to naive UTC; it now raises
+  ``AlignmentError`` telling you to localize both sides, instead of being
+  reported as a generic misalignment. Prediction outputs carry
+  ``time``/``time_future`` as a tz-aware ``DatetimeIndex``, so ``.sel`` by
+  date string and ``.resample`` work. Statespace ``forecast`` stamps
+  ``time_future`` without treating the training index name ``"time"`` as
+  that dimension.
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the
   fixed height. `docs/_static/custom.css` sets `height: auto` on cell-output

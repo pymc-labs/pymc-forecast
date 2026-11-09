@@ -403,12 +403,19 @@ def concat_covariates(covariates, future_covariates) -> xr.DataArray:
     pymc_forecast.exceptions.AlignmentError
         If an input cannot be normalized, the future time index does not
         extend the training window, or the dims (including their order),
-        sizes, or coordinates of the non-time dims differ.
+        sizes, or coordinates of the non-time dims differ. A naive index
+        beside an aware one is not comparable. An aware future index in
+        another zone is not an error: it is stamped in the training zone
+        before concatenation, same as :func:`concat_time_index`.
     """
     covariates = as_dataarray(covariates, role="covariates")
     fut = as_dataarray(future_covariates, role="covariates")
     _validate_covariate_structure(covariates, fut)
-    concat_time_index(as_time_index(covariates), as_time_index(fut))
+    full = concat_time_index(as_time_index(covariates), as_time_index(fut))
+    # ``concat_time_index`` converts another aware zone to the training zone.
+    # ``xr.concat`` still sees the original coord and raises TypeError unless
+    # the future rows are restamped with that converted index.
+    fut = fut.assign_coords({TIME_DIM: full[covariates.sizes[TIME_DIM] :]})
     return xr.concat([covariates, fut], dim=TIME_DIM, join="exact")
 
 
@@ -465,10 +472,10 @@ def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
     ------
     pymc_forecast.exceptions.AlignmentError
         If ``covariates`` is shorter than ``data`` along ``"time"``, the leading
-        covariate time coords differ from the data time coords, a shared
-        non-time dim differs in size or coordinates (or is labeled on one side
-        only), or the surplus time coords are not strictly increasing after
-        training.
+        covariate time coords differ from the data time coords, one time index
+        is timezone-aware and the other is not, a shared non-time dim differs
+        in size or coordinates (or is labeled on one side only), or the surplus
+        time coords are not strictly increasing after training.
     """
     t_obs = data.sizes[TIME_DIM]
     if covariates.sizes[TIME_DIM] < t_obs:
@@ -477,7 +484,18 @@ def validate_alignment(data: xr.DataArray, covariates: xr.DataArray) -> None:
             f"{covariates.sizes[TIME_DIM]} covariate steps < {t_obs} data steps"
         )
         raise AlignmentError(msg)
-    data_time, cov_time = _common_zone(as_time_index(data), as_time_index(covariates))
+    data_time = as_time_index(data)
+    cov_time = as_time_index(covariates)
+    data_tz = _single_zone(data_time)
+    cov_tz = _single_zone(cov_time)
+    if (data_tz is None) != (cov_tz is None):
+        msg = (
+            f"data '{TIME_DIM}' is timezone-{'aware' if data_tz else 'naive'} but "
+            f"covariates '{TIME_DIM}' is timezone-{'aware' if cov_tz else 'naive'}; "
+            "localize both to one zone"
+        )
+        raise AlignmentError(msg)
+    data_time, cov_time = _common_zone(data_time, cov_time)
     if not data_time.equals(cov_time[:t_obs]):
         msg = (
             f"the first {t_obs} covariate '{TIME_DIM}' coords must equal the data "
