@@ -179,15 +179,15 @@ def as_time_index(index):
     ``np.asarray`` and ``DataArray.values`` turn a timezone-aware
     ``DatetimeIndex`` into naive UTC and shift the clock (``22:00`` in
     ``America/Los_Angeles`` becomes ``06:00`` the next day). This helper
-    reads a ``DataArray``'s ``"time"`` index with ``get_index`` and returns
-    a ``pandas.Index`` unchanged. A bare array is wrapped with ``pd.Index``
-    only when it is not already an index — never via ``np.asarray`` on a
-    timezone-aware index.
+    reads the ``"time"`` index of a ``DataArray`` or ``Dataset`` with
+    ``get_index`` and returns a ``pandas.Index`` unchanged. A bare array is
+    wrapped with ``pd.Index`` only when it is not already an index — never via
+    ``np.asarray`` on a timezone-aware index.
 
     Parameters
     ----------
-    index : pandas.Index, xarray.DataArray or array_like
-        A time index, or an array with a ``"time"`` dimension.
+    index : pandas.Index, xarray.DataArray, xarray.Dataset or array_like
+        A time index, or an xarray object with a ``"time"`` dimension.
 
     Returns
     -------
@@ -197,15 +197,16 @@ def as_time_index(index):
     Raises
     ------
     pymc_forecast.exceptions.AlignmentError
-        If ``index`` is a ``DataArray`` with no ``"time"`` index.
+        If ``index`` is a ``DataArray`` or ``Dataset`` with no ``"time"``
+        index.
     """
     import pandas as pd
 
-    if isinstance(index, xr.DataArray):
+    if isinstance(index, xr.DataArray | xr.Dataset):
         try:
             return index.get_index(TIME_DIM)
         except KeyError as err:
-            msg = f"as_time_index requires a '{TIME_DIM}' index; got dims {index.dims}"
+            msg = f"as_time_index requires a '{TIME_DIM}' index; got dims {tuple(index.dims)}"
             raise AlignmentError(msg) from err
     if isinstance(index, pd.Index):
         return index

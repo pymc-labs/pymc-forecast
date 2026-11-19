@@ -20,7 +20,7 @@ classifiers = [
 dependencies = [
     "pymc>=5.20",
     "arviz>=0.20",
-    "numpy",
+    "numpy>=1.25",
     "pooch",
     "xarray>=2024.10",
 ]

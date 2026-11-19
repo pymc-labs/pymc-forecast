@@ -7,6 +7,38 @@ The dim/coord/group/variable names on prediction outputs (documented in
 breaking change, made only in a minor release and called out here.
 
 ## Unreleased
+- `backtest` takes a `forecast_fn` closure, the functional backtest of
+  numpyro_forecast 0.4.0 (#99). It is called once per window as
+  `forecast_fn(rng, model_fn, train_data, train_covariates, full_covariates,
+  num_samples, *, batch_size=None)`, fits the model and returns the forecast
+  draws as a `DataArray` with `chain` and `draw` dims. An optional
+  `in_sample_fn` does the same for `eval_train=True`. With a closure,
+  `num_samples` on the result is the number of draws it returned,
+  `test_walltime` times the whole call and `train_walltime` is `nan`.
+  `forecaster_cls` now defaults to `None`, which still means `Forecaster`.
+  `forecast_fn` cannot be combined with `forecaster_cls`,
+  `forecaster_options` or a `var_name` other than `"forecast"`; these
+  combinations, and `eval_train` without `in_sample_fn`, raise `ValueError`
+  before the first fit.
+- `backtest(data=...)` accepts an `xarray.Dataset` of several observed tables
+  together with `forecast_fn` and `transform`. Each table is cut at the
+  forecast origin and keeps its dims and dtype. A data variable without a
+  `time` dim raises `AlignmentError`, and a `Dataset` without `forecast_fn`
+  or `transform` is rejected before the first fit. `as_time_index` accepts a
+  `Dataset`.
+- `backtest(var_name=...)` selects the variable of the `predictions` group
+  that is scored and kept, e.g. `mu_future` or a `revenue_future` latent.
+  A `var_name` other than `"forecast"` cannot be combined with `eval_train`,
+  whose in-sample score is of `obs`. The docstring of `backtest` now states
+  the calls it makes on `forecaster_cls`.
+- `backtest(random_seed=...)` accepts a `numpy.random.Generator`; each
+  window gets a child from `Generator.spawn`. Forecaster classes still get
+  `int` seeds, the closures get generators. Integer seeds give the same
+  forecaster seeds as before.
+- `backtest(batch_size=...)` is passed to the closures, and to the
+  `forecast` and `predict_in_sample` methods of `forecaster_cls` when set.
+- `numpy>=1.25` is now a stated requirement (`Generator.spawn`).
+
 - ``predict`` left-aligns a length-``duration`` latent across batch dims. A
   1-d time effect on a square panel is no longer broadcast as a series effect,
   so both ``mu`` and the observation log-probability follow the time axis.
