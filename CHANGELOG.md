@@ -9,7 +9,7 @@ breaking change, made only in a minor release and called out here.
 ## 0.4.0 (2026-11-19)
 
 - `backtest` takes a `forecast_fn` closure, the functional backtest of
-  numpyro_forecast 0.4.0 (#99). It is called once per window as
+  numpyro_forecast 0.4.0. It is called once per window as
   `forecast_fn(rng, model_fn, train_data, train_covariates, full_covariates,
   num_samples, /, *, batch_size=None)`, fits the model and returns the
   forecast draws as a `DataArray` with `chain` and `draw` dims, or a `sample`
@@ -24,30 +24,35 @@ breaking change, made only in a minor release and called out here.
   combinations, `eval_train` without `in_sample_fn` and `in_sample_fn`
   without `eval_train` raise `ValueError` before the first fit. With a
   closure, covariates that fail the checks of `validate_alignment` (time
-  labels, shared non-time dims) raise `AlignmentError` before the first fit.
+  labels, shared non-time dims) raise `AlignmentError` before the first fit
+  ([#99](https://github.com/pymc-labs/pymc-forecast/issues/99),
+  [#100](https://github.com/pymc-labs/pymc-forecast/pull/100)).
 - `backtest(data=...)` accepts an `xarray.Dataset` of several observed tables
   together with `forecast_fn` and `transform`. Each table is cut at the
   forecast origin and keeps its dims and dtype. A data variable without a
   `time` dim raises `AlignmentError`, and a `Dataset` without `forecast_fn`
   or `transform` is rejected before the first fit. `as_time_index` accepts a
-  `Dataset`.
+  `Dataset` ([#100](https://github.com/pymc-labs/pymc-forecast/pull/100)).
 - `backtest(var_name=...)` selects the variable of the `predictions` group
   that is scored and kept, e.g. `mu_future` or a `revenue_future` latent.
   A `var_name` other than `"forecast"` cannot be combined with `eval_train`,
   whose in-sample score is of `obs`. A name missing from the group raises a
   `KeyError` that lists the variables there. The docstring of `backtest` now
-  states the calls it makes on `forecaster_cls`.
+  states the calls it makes on `forecaster_cls`
+  ([#100](https://github.com/pymc-labs/pymc-forecast/pull/100)).
 - `backtest(random_seed=...)` accepts a `numpy.random.Generator` or a
   `numpy.random.SeedSequence`; each window gets a child from its `spawn`.
   Forecaster classes still get `int` seeds, the closures get generators.
   Integer seeds give the same forecaster seeds as before, and a fresh
   `default_rng(seed)` or `SeedSequence(seed)` gives the same results as
-  `seed`.
+  `seed` ([#100](https://github.com/pymc-labs/pymc-forecast/pull/100)).
 - `backtest(batch_size=...)` is passed to the closures, and to the
   `forecast` and `predict_in_sample` methods of `forecaster_cls` when set. A
   class whose methods do not accept it, such as `StatespaceForecaster`, is
-  rejected with `TypeError` before the first fit.
-- `numpy>=1.25` is now a stated requirement (`Generator.spawn`).
+  rejected with `TypeError` before the first fit
+  ([#100](https://github.com/pymc-labs/pymc-forecast/pull/100)).
+- `numpy>=1.25` is now a stated requirement (`Generator.spawn`)
+  ([#100](https://github.com/pymc-labs/pymc-forecast/pull/100)).
 
 - ``predict`` left-aligns a length-``duration`` latent across batch dims. A
   1-d time effect on a square panel is no longer broadcast as a series effect,
@@ -55,33 +60,37 @@ breaking change, made only in a minor release and called out here.
   The same holds for any time-major latent with fewer axes than the panel,
   such as ``(duration, 1)`` or ``(duration, n_region)`` with
   ``dims=("region", "store")``. A 0-d latent now raises ``HorizonError``
-  instead of an ``IndexError``.
+  instead of an ``IndexError``
+  ([#86](https://github.com/pymc-labs/pymc-forecast/pull/86)).
 
 - Fix ``fourier_features`` on NumPy and Python scalar phases: a 0-d position
   such as ``np.int64(10)`` or ``10.0`` is one phase, not an indexing error.
   A built-in ``int`` is still a duration. A boolean ``time`` (``True``,
   ``np.bool_(True)``) now raises ``TypeError`` instead of being read as a
-  duration of one or a phase of one.
+  duration of one or a phase of one
+  ([#83](https://github.com/pymc-labs/pymc-forecast/pull/83)).
 - Nested ``Prior`` parameters are name-aligned to each segment's dims. A
   hyper-prior dimmed on ``"a"`` no longer trailing-broadcasts onto the last
   dim of ``("time", "a", "b")`` or of the forecast segment, and the same RV
   is shared. Observation likelihoods use the same alignment. A
   ``centered=False`` nested prior is included: it name-aligns instead of
-  raising when the parameter is not a raw tensor.
+  raising when the parameter is not a raw tensor
+  ([#88](https://github.com/pymc-labs/pymc-forecast/pull/88)).
 
 - `make_mase` accumulates the seasonal-naive scale in float64. Integer and
   low-precision training series no longer wrap into a negative or hugely
   inflated scale. A boolean training series now yields a scale instead of a
   ``TypeError``. A NaN or infinity in ``train_data`` now raises ``ValueError``
   instead of returning NaN for every score, and the factory exposes the scale
-  as ``mase.scale``.
+  as ``mase.scale`` ([#84](https://github.com/pymc-labs/pymc-forecast/pull/84)).
 
 - `as_dataarray` ignores scalar pandas axis names. A named index or columns
   axis is no longer treated as an xarray dimension, so `set_index("date")`
   and a square frame whose index is named `covariate` keep the `time` /
   `series` / `covariate` dims. Timezone and frequency on a named
   `DatetimeIndex` are preserved. A Series whose own name equals a dim name
-  (`"time"`, `"series"`, ...) is returned unnamed, so `to_dataset()` works.
+  (`"time"`, `"series"`, ...) is returned unnamed, so `to_dataset()` works
+  ([#87](https://github.com/pymc-labs/pymc-forecast/pull/87)).
 
 - `predict_in_sample` and `forecast` raise `AlignmentError` when a posterior's
   non-sample coordinates differ in labels or order from the model, instead of
@@ -99,7 +108,8 @@ breaking change, made only in a minor release and called out here.
   (and `expected_observation`) over that window, so forecasting from a later
   origin with a posterior fitted on an earlier window now raises instead of
   running; refit on the new window. `Forecaster.forecast` always uses its
-  training data and is unaffected.
+  training data and is unaffected
+  ([#89](https://github.com/pymc-labs/pymc-forecast/pull/89)).
 
 - Keep a single-zone time index's timezone and clock. Time helpers, model
   coords, and forecast outputs no longer rebuild a timezone-aware
@@ -125,22 +135,30 @@ breaking change, made only in a minor release and called out here.
   index PyMC returns, because ArviZ summaries and plots reject a tz-aware
   ``DatetimeIndex`` coord.
   Statespace ``forecast`` stamps ``time_future`` without treating the
-  training index name ``"time"`` as that dimension.
+  training index name ``"time"`` as that dimension
+  ([#85](https://github.com/pymc-labs/pymc-forecast/pull/85)).
 - Breaking: ``Horizon.from_data`` stores ``time``/``time_future`` as a
   ``pandas.Index`` (timezone included) instead of a ``numpy.ndarray``. Model
   code that applies ndarray-only operations to them (e.g. ``h.time[:, None]``)
-  should call ``np.asarray`` first, which drops the timezone.
+  should call ``np.asarray`` first, which drops the timezone
+  ([#85](https://github.com/pymc-labs/pymc-forecast/pull/85)).
+- uv-managed development environments are constrained to
+  `certifi>=2026.10.19` (`[tool.uv] constraint-dependencies`), so they do not
+  resolve a certifi CA bundle from before the eMudhra/emSign incident. The
+  package's runtime dependencies are unchanged
+  ([#68](https://github.com/pymc-labs/pymc-forecast/pull/68)).
 - Docs: notebook figures no longer render vertically stretched. Retina outputs
   carry `width`/`height` attributes; the theme capped the width but kept the
   fixed height. `docs/_static/custom.css` sets `height: auto` on cell-output
-  images.
+  images ([#66](https://github.com/pymc-labs/pymc-forecast/pull/66)).
 - Docs: every public function, class, method, and property now has a complete
   NumPy-style docstring: typed `Parameters` (the API reference shows no type
   hints, so these are the only types it renders), `Returns`, `Raises`, and
   `Warns`. Incorrect statements were fixed, for example: `backtest` windows
   are positional slices, `load_m5(cache_dir=...)` downloads into that directory,
   `make_mase` pools one scale across all series, and `periodic_repeat` needs
-  `period=` for every PyTensor input.
+  `period=` for every PyTensor input
+  ([#67](https://github.com/pymc-labs/pymc-forecast/pull/67)).
 
 ## 0.3.0 (2026-10-05)
 
