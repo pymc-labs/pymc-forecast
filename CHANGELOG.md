@@ -6,7 +6,8 @@ The dim/coord/group/variable names on prediction outputs (documented in
 [docs/schema.md](docs/schema.md)) are public API: any change to them is a
 breaking change, made only in a minor release and called out here.
 
-## Unreleased
+## 0.4.0 (2026-11-19)
+
 - `backtest` takes a `forecast_fn` closure, the functional backtest of
   numpyro_forecast 0.4.0 (#99). It is called once per window as
   `forecast_fn(rng, model_fn, train_data, train_covariates, full_covariates,
