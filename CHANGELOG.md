@@ -10,16 +10,20 @@ breaking change, made only in a minor release and called out here.
 - `backtest` takes a `forecast_fn` closure, the functional backtest of
   numpyro_forecast 0.4.0 (#99). It is called once per window as
   `forecast_fn(rng, model_fn, train_data, train_covariates, full_covariates,
-  num_samples, *, batch_size=None)`, fits the model and returns the forecast
-  draws as a `DataArray` with `chain` and `draw` dims. An optional
-  `in_sample_fn` does the same for `eval_train=True`. With a closure,
-  `num_samples` on the result is the number of draws it returned,
+  num_samples, /, *, batch_size=None)`, fits the model and returns the
+  forecast draws as a `DataArray` with `chain` and `draw` dims, or a `sample`
+  dim stacked as by `arviz.extract`. An optional `in_sample_fn` does the same
+  for `eval_train=True`; each window then calls both closures, each with its
+  own generator, so a closure pair that fits in each call fits twice. With a
+  closure, `num_samples` on the result is the number of draws it returned,
   `test_walltime` times the whole call and `train_walltime` is `nan`.
   `forecaster_cls` now defaults to `None`, which still means `Forecaster`.
   `forecast_fn` cannot be combined with `forecaster_cls`,
   `forecaster_options` or a `var_name` other than `"forecast"`; these
-  combinations, and `eval_train` without `in_sample_fn`, raise `ValueError`
-  before the first fit.
+  combinations, `eval_train` without `in_sample_fn` and `in_sample_fn`
+  without `eval_train` raise `ValueError` before the first fit. With a
+  closure, covariates that fail the checks of `validate_alignment` (time
+  labels, shared non-time dims) raise `AlignmentError` before the first fit.
 - `backtest(data=...)` accepts an `xarray.Dataset` of several observed tables
   together with `forecast_fn` and `transform`. Each table is cut at the
   forecast origin and keeps its dims and dtype. A data variable without a
@@ -29,14 +33,19 @@ breaking change, made only in a minor release and called out here.
 - `backtest(var_name=...)` selects the variable of the `predictions` group
   that is scored and kept, e.g. `mu_future` or a `revenue_future` latent.
   A `var_name` other than `"forecast"` cannot be combined with `eval_train`,
-  whose in-sample score is of `obs`. The docstring of `backtest` now states
-  the calls it makes on `forecaster_cls`.
-- `backtest(random_seed=...)` accepts a `numpy.random.Generator`; each
-  window gets a child from `Generator.spawn`. Forecaster classes still get
-  `int` seeds, the closures get generators. Integer seeds give the same
-  forecaster seeds as before.
+  whose in-sample score is of `obs`. A name missing from the group raises a
+  `KeyError` that lists the variables there. The docstring of `backtest` now
+  states the calls it makes on `forecaster_cls`.
+- `backtest(random_seed=...)` accepts a `numpy.random.Generator` or a
+  `numpy.random.SeedSequence`; each window gets a child from its `spawn`.
+  Forecaster classes still get `int` seeds, the closures get generators.
+  Integer seeds give the same forecaster seeds as before, and a fresh
+  `default_rng(seed)` or `SeedSequence(seed)` gives the same results as
+  `seed`.
 - `backtest(batch_size=...)` is passed to the closures, and to the
-  `forecast` and `predict_in_sample` methods of `forecaster_cls` when set.
+  `forecast` and `predict_in_sample` methods of `forecaster_cls` when set. A
+  class whose methods do not accept it, such as `StatespaceForecaster`, is
+  rejected with `TypeError` before the first fit.
 - `numpy>=1.25` is now a stated requirement (`Generator.spawn`).
 
 - ``predict`` left-aligns a length-``duration`` latent across batch dims. A

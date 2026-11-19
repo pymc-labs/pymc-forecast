@@ -11,6 +11,7 @@ numpyro_forecast / Pyro. Windows are positional (integer) slices along
 real time coords.
 """
 
+import inspect
 import math
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -22,10 +23,7 @@ import numpy as np
 import xarray as xr
 
 from pymc_forecast.data import (
-    CHAIN_DIM,
-    DRAW_DIM,
     FUTURE_DIM,
-    SAMPLE_DIMS,
     TIME_DIM,
     as_dataarray,
     as_time_index,
@@ -34,7 +32,7 @@ from pymc_forecast.data import (
 )
 from pymc_forecast.exceptions import AlignmentError, BacktestWindowError
 from pymc_forecast.forecaster import Forecaster
-from pymc_forecast.metrics import DEFAULT_METRICS, Metric, evaluate_forecast
+from pymc_forecast.metrics import _SAMPLE_DIMS, DEFAULT_METRICS, Metric, evaluate_forecast
 from pymc_forecast.model import FORECAST_VAR, OBS_VAR
 
 __all__ = ["BacktestResult", "WindowType", "backtest", "results_to_dataframe"]
@@ -61,9 +59,9 @@ class BacktestResult:
         Exclusive end of the test slice.
     num_samples : int
         Forecast samples per window: the requested ``num_samples`` with
-        ``forecaster_cls``; with ``forecast_fn``, the ``chain`` size times the
-        ``draw`` size of the draws it returned, which may differ from the
-        request.
+        ``forecaster_cls``; with ``forecast_fn``, the number of draws it
+        returned (the product of the sizes of its sample dims), which may
+        differ from the request.
     train_walltime : float
         Wall-clock seconds to construct (build and fit) the forecaster;
         ``nan`` with ``forecast_fn``, whose fit is timed in ``test_walltime``.
@@ -161,12 +159,14 @@ def _windows(
 def _window_seeds(random_seed, num_windows: int) -> list[np.random.SeedSequence]:
     """One child ``SeedSequence`` per window.
 
-    A ``Generator`` spawns the children itself (``Generator.spawn``, which
-    advances its spawn counter); any other seed goes through
+    A ``Generator`` or a ``SeedSequence`` spawns the children itself, which
+    advances its spawn counter; any other seed goes through
     ``SeedSequence(random_seed)``.
     """
     if isinstance(random_seed, np.random.Generator):
         return [child.bit_generator.seed_seq for child in random_seed.spawn(num_windows)]
+    if isinstance(random_seed, np.random.SeedSequence):
+        return random_seed.spawn(num_windows)
     return np.random.SeedSequence(random_seed).spawn(num_windows)
 
 
@@ -211,6 +211,9 @@ def _check_drivers(
         if eval_train and in_sample_fn is None:
             msg = "eval_train=True with forecast_fn requires in_sample_fn"
             raise ValueError(msg)
+        if in_sample_fn is not None and not eval_train:
+            msg = "in_sample_fn is only called with eval_train=True; set it or drop in_sample_fn"
+            raise ValueError(msg)
     if eval_train and var_name != FORECAST_VAR:
         msg = (
             f"var_name={var_name!r} cannot be combined with eval_train=True: the "
@@ -223,6 +226,57 @@ def _check_drivers(
             "Dataset data requires transform, which returns the truth of the target as a DataArray"
         )
         raise ValueError(msg)
+
+
+def _accepts_batch_size(method) -> bool:
+    """Whether ``method`` takes a ``batch_size`` keyword; ``True`` when it cannot be read."""
+    try:
+        parameters = inspect.signature(method).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    return any(
+        param.kind is param.VAR_KEYWORD
+        or (
+            param.name == "batch_size"
+            and param.kind in (param.POSITIONAL_OR_KEYWORD, param.KEYWORD_ONLY)
+        )
+        for param in parameters
+    )
+
+
+def _check_batch_size(forecaster_cls, *, eval_train: bool) -> None:
+    """Reject a ``forecaster_cls`` whose methods take no ``batch_size``, before any fit.
+
+    Reads the methods on the class. A factory without them (a function, a
+    ``functools.partial``) is not checked; the first call decides.
+    """
+    names = ("forecast", "predict_in_sample") if eval_train else ("forecast",)
+    for name in names:
+        method = getattr(forecaster_cls, name, None)
+        if method is not None and not _accepts_batch_size(method):
+            owner = getattr(forecaster_cls, "__name__", type(forecaster_cls).__name__)
+            msg = f"{owner}.{name} does not accept batch_size; pass batch_size=None"
+            raise TypeError(msg)
+
+
+def _check_closure_covariates(data_obj, cov_da: xr.DataArray) -> None:
+    """Run the alignment checks of the forecasters once, for the closure path.
+
+    The forecasters check the ``time`` labels and the shared non-time dims of
+    every window; a closure gets no such check. A ``Dataset`` is checked through
+    one data variable per dims tuple, each carrying the dataset coords of its
+    own dims.
+    """
+    if isinstance(data_obj, xr.DataArray):
+        validate_alignment(data_obj, cov_da)
+        return
+    by_dims = {var.dims: name for name, var in data_obj.data_vars.items()}
+    for name in by_dims.values():
+        try:
+            validate_alignment(data_obj[name], cov_da)
+        except AlignmentError as err:
+            msg = f"Dataset data variable {name!r}: {err}"
+            raise AlignmentError(msg) from err
 
 
 def _as_backtest_data(data) -> xr.DataArray | xr.Dataset:
@@ -245,14 +299,37 @@ def _as_backtest_data(data) -> xr.DataArray | xr.Dataset:
 
 
 def _num_draws(draws, source: str) -> int:
-    """Check the draws a closure returned and count them (``chain`` times ``draw``)."""
+    """Check the draws a closure returned and count them over their sample dims."""
     if not isinstance(draws, xr.DataArray):
         msg = f"{source} must return an xarray.DataArray of draws, got {type(draws).__name__}"
         raise TypeError(msg)
-    if not set(SAMPLE_DIMS) <= set(draws.dims):
-        msg = f"{source} must return draws with dims {SAMPLE_DIMS}, got dims {draws.dims}"
+    sample_dims = [dim for dim in draws.dims if dim in _SAMPLE_DIMS]
+    if not sample_dims:
+        msg = (
+            f"{source} must return draws with sample dims, 'chain' and 'draw' or a "
+            f"'sample' dim stacked as by arviz.extract; got dims {draws.dims}"
+        )
         raise ValueError(msg)
-    return draws.sizes[CHAIN_DIM] * draws.sizes[DRAW_DIM]
+    return math.prod(draws.sizes[dim] for dim in sample_dims)
+
+
+def _predictions_var(tree, var_name: str, source: str) -> xr.DataArray:
+    """``tree["predictions"][var_name]``, naming what is there when it is missing."""
+    try:
+        group = tree["predictions"]
+    except KeyError as err:
+        msg = f"{source} returned no 'predictions' group"
+        raise KeyError(msg) from err
+    try:
+        return group[var_name]
+    except KeyError as err:
+        variables = getattr(group, "data_vars", group if isinstance(group, Mapping) else ())
+        names = sorted(str(name) for name in variables)
+        msg = (
+            f"var_name={var_name!r} is not in the 'predictions' group of {source}, "
+            f"which has {names}"
+        )
+        raise KeyError(msg) from err
 
 
 @dataclass(frozen=True)
@@ -296,7 +373,7 @@ def _forecaster_window(
         )
         return ppc["posterior_predictive"][OBS_VAR]
 
-    pred = tree["predictions"][var_name]
+    pred = _predictions_var(tree, var_name, f"{type(forecaster).__name__}.forecast")
     return _WindowForecast(pred, num_samples, train_walltime, test_walltime, in_sample)
 
 
@@ -396,34 +473,42 @@ def backtest(
       ``train_data``.
 
     When ``batch_size`` is not ``None``, both methods also get
-    ``batch_size=batch_size``;
-    :class:`~pymc_forecast.statespace.StatespaceForecaster` does not accept
-    it.
+    ``batch_size=batch_size``. A class whose ``forecast`` (or, with
+    ``eval_train``, ``predict_in_sample``) has neither a ``batch_size``
+    parameter nor ``**kwargs``, such as
+    :class:`~pymc_forecast.statespace.StatespaceForecaster`, is then rejected
+    before the first fit. The check reads the methods of the class; a factory
+    function or a ``functools.partial`` is not checked.
 
     **Closure protocol.** ``forecast_fn`` and ``in_sample_fn`` get positional
     arguments and a keyword ``batch_size``::
 
         forecast_fn(rng, model_fn, train_data, train_covariates,
-                    full_covariates, num_samples, *, batch_size=None)
+                    full_covariates, num_samples, /, *, batch_size=None)
         in_sample_fn(rng, model_fn, train_data, train_covariates,
-                     num_samples, *, batch_size=None)
+                     num_samples, /, *, batch_size=None)
 
     ``rng`` is a ``numpy.random.Generator``, a separate stream per window and
     per closure. ``model_fn`` is passed through as given. ``train_covariates``
     are the covariate rows ``t0:t1`` and ``full_covariates`` the rows
     ``t0:t2``. ``forecast_fn`` returns the forecast draws of the test rows and
     ``in_sample_fn`` the draws of the training rows, each an
-    ``xarray.DataArray`` with the sample dims ``chain`` and ``draw``. Without
-    a ``transform`` the other dims must align with the truth (``time_future``
-    or ``time``, and the data dims); with one, any dims are allowed. The
-    closure may return another number of draws than ``num_samples``; the
-    result records what it returned.
+    ``xarray.DataArray`` with the sample dims ``chain`` and ``draw``, or a
+    ``sample`` dim stacked as by ``arviz.extract``: any of the sample dims the
+    metrics accept. Without a ``transform`` the other dims must align with the
+    truth (``time_future`` or ``time``, and the data dims); with one, any dims
+    are allowed. The closure may return another number of draws than
+    ``num_samples``; the result records what it returned.
 
     Each closure call must fit its own window: the functional
     :func:`~pymc_forecast.prediction.forecast` rejects a posterior fitted on
     another window. A closure that builds and fits the model also owns any
-    reuse of a compiled model across windows. A ``forecast_fn`` on the
-    functional API::
+    reuse of a compiled model across windows. With ``eval_train``, each window
+    calls both closures with two generators, so the model is fitted twice per
+    window (as in numpyro_forecast): the test and in-sample scores come from
+    two posteriors, and an MCMC closure pays for two fits. To fit once, the
+    two closures can share a cache of fits keyed on the training ``time``
+    coords. A ``forecast_fn`` on the functional API::
 
         def forecast_fn(rng, model_fn, train_data, train_covariates,
                         full_covariates, num_samples, /, *, batch_size=None):
@@ -466,14 +551,18 @@ def backtest(
         closure protocol above).
     in_sample_fn : callable, optional
         Closure that fits each window and returns its in-sample draws (see
-        the closure protocol above). Requires ``forecast_fn``; ``eval_train``
-        with ``forecast_fn`` requires it.
+        the closure protocol above). It requires ``forecast_fn`` and
+        ``eval_train=True``, and ``eval_train`` with ``forecast_fn`` requires
+        it.
     var_name : str, default "forecast"
         Variable of the ``predictions`` group of ``forecaster_cls.forecast``
-        that is scored and kept, e.g. ``"mu_future"`` or another
-        ``*_future`` variable. Another name than ``"forecast"`` cannot be
-        combined with ``forecast_fn``, which returns its target directly, or
-        with ``eval_train``, whose in-sample score is of ``"obs"``.
+        that is scored and kept, e.g. ``"mu_future"``. The built-in
+        forecasters record ``"forecast"``, every free ``*_future`` variable,
+        ``"mu_future"`` and, when the model supplies it,
+        ``"expected_observation_future"``; a ``pm.Deterministic`` is not
+        recorded. Another name than ``"forecast"`` cannot be combined with
+        ``forecast_fn``, which returns its target directly, or with
+        ``eval_train``, whose in-sample score is of ``"obs"``.
     metrics : mapping, optional
         Metric name → function; defaults to
         :data:`~pymc_forecast.metrics.DEFAULT_METRICS`. Bind metric parameters
@@ -523,16 +612,19 @@ def backtest(
         Also score the in-sample posterior predictive of each window.
     keep_predictions : bool, default False
         Keep each window's (transformed) forecast samples on the result.
-    random_seed : int, sequence of int, numpy.random.Generator or None, optional
+    random_seed : int, sequence of int, SeedSequence, Generator or None, optional
         Base seed. Each window gets a child ``numpy.random.SeedSequence``,
-        spawned from ``SeedSequence(random_seed)``, or by
-        ``Generator.spawn`` for a ``Generator``. ``forecaster_cls`` gets two
+        spawned from ``SeedSequence(random_seed)``, or by the ``spawn`` method
+        of a ``SeedSequence`` or ``Generator``. ``forecaster_cls`` gets two
         ``int`` seeds per window (fit and forecast) from the child. The
         closures get one ``Generator`` each, from two children of the
         window's ``SeedSequence``, so ``eval_train`` does not change the
-        forecasts. ``Generator.spawn`` advances the generator's spawn counter:
-        two calls with the same ``Generator`` object give different results,
-        and two generators created with the same seed give the same results.
+        forecasts. ``spawn`` advances the spawn counter of the object: two
+        calls with the same ``Generator`` or ``SeedSequence`` give different
+        results. Numbers drawn from a ``Generator`` do not change its
+        children, so only its seed and its spawn counter matter: for the same
+        integer seed, a fresh ``default_rng(seed)`` or ``SeedSequence(seed)``
+        gives the same results as ``seed``.
 
     Returns
     -------
@@ -548,22 +640,30 @@ def backtest(
         ``train_window < min_train_window``, or the series is too short for
         any window.
     pymc_forecast.exceptions.AlignmentError
-        If ``data`` or ``covariates`` cannot be normalized, a ``Dataset`` data
-        variable has no ``"time"`` dim, or (with ``forecast_fn``) the
-        covariate ``"time"`` coords do not start with the ones of ``data``.
-        Errors raised by ``forecaster_cls`` or the closures
-        (fitting/forecasting) and by the metrics propagate.
+        If ``data`` or ``covariates`` cannot be normalized, or a ``Dataset``
+        data variable has no ``"time"`` dim. With ``forecast_fn``, before any
+        fit, if the covariates fail the checks the forecasters run per window
+        (:func:`~pymc_forecast.data.validate_alignment`): ``"time"`` coords
+        that do not start with the ones of ``data``, or a shared non-time dim
+        with another size or other labels. Errors raised by
+        ``forecaster_cls`` or the closures (fitting/forecasting) and by the
+        metrics propagate.
     ValueError
         Before any fit, if ``forecast_fn`` is combined with
         ``forecaster_cls``, ``forecaster_options`` or a ``var_name`` other
         than ``"forecast"``; ``in_sample_fn`` is given without
-        ``forecast_fn``; ``eval_train`` is set with ``forecast_fn`` and no
-        ``in_sample_fn``, or with a ``var_name`` other than ``"forecast"``;
-        or ``data`` is a ``Dataset`` and ``transform`` is not given. After a
-        closure call, if its draws lack the ``chain`` or ``draw`` dim.
+        ``forecast_fn`` or without ``eval_train``; ``eval_train`` is set with
+        ``forecast_fn`` and no ``in_sample_fn``, or with a ``var_name`` other
+        than ``"forecast"``; or ``data`` is a ``Dataset`` and ``transform`` is
+        not given. After a closure call, if its draws have no sample dim.
     TypeError
-        If ``data`` is a ``Dataset`` and ``forecast_fn`` is not given, or a
-        closure returns something other than an ``xarray.DataArray``.
+        Before any fit, if ``data`` is a ``Dataset`` and ``forecast_fn`` is
+        not given, or ``batch_size`` is set and a method of ``forecaster_cls``
+        does not accept it. After a closure call, if it returned something
+        other than an ``xarray.DataArray``.
+    KeyError
+        After the first forecast, if the result of ``forecaster_cls.forecast``
+        has no ``predictions`` group or no ``var_name`` variable in it.
 
     Warns
     -----
@@ -581,19 +681,17 @@ def backtest(
         eval_train=eval_train,
     )
     data_obj = _as_backtest_data(data)
-    time_index = as_time_index(data_obj)
     if covariates is None:
-        cov_da = null_covariates(time_index)
+        cov_da = null_covariates(as_time_index(data_obj))
     else:
         cov_da = as_dataarray(covariates, role="covariates")
         if forecast_fn is not None:
-            # The forecasters check this per window; a closure gets no check.
-            time_only = xr.DataArray(
-                np.zeros(len(time_index)), dims=(TIME_DIM,), coords={TIME_DIM: time_index}
-            )
-            validate_alignment(time_only, cov_da)
-    if forecast_fn is None and forecaster_cls is None:
-        forecaster_cls = Forecaster
+            _check_closure_covariates(data_obj, cov_da)
+    if forecast_fn is None:
+        if forecaster_cls is None:
+            forecaster_cls = Forecaster
+        if batch_size is not None:
+            _check_batch_size(forecaster_cls, eval_train=eval_train)
     duration = data_obj.sizes[TIME_DIM]
     resolved_type = _resolve_window_type(window_type, train_window)
     metrics = dict(DEFAULT_METRICS if metrics is None else metrics)

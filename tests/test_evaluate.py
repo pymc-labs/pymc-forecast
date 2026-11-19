@@ -1,4 +1,5 @@
 import copy
+import functools
 
 import numpy as np
 import pandas as pd
@@ -229,6 +230,38 @@ class BatchedLastValueForecaster(LastValueForecaster):
         return super().forecast(covariates, num_samples=num_samples, random_seed=random_seed)
 
 
+class KwargsLastValueForecaster(LastValueForecaster):
+    def forecast(self, covariates, **kwargs):
+        self.log.append(("batch_size", kwargs.pop("batch_size")))
+        return super().forecast(covariates, **kwargs)
+
+
+class UnfittableForecaster(LastValueForecaster):
+    """``forecast`` takes no ``batch_size``; a fit fails the test."""
+
+    def __init__(self, *args, **kwargs):
+        never_called()
+
+
+class UnfittableInSampleForecaster(BatchedLastValueForecaster):
+    """``predict_in_sample`` takes no ``batch_size``; a fit fails the test."""
+
+    def __init__(self, *args, **kwargs):
+        never_called()
+
+    def predict_in_sample(self, num_samples=None, random_seed=None):
+        never_called()
+
+
+def stacked(closure):
+    """Return the closure's draws with ``chain`` and ``draw`` stacked, as ``az.extract`` does."""
+
+    def wrapped(*args, **kwargs):
+        return closure(*args, **kwargs).stack(sample=("chain", "draw"))
+
+    return wrapped
+
+
 def last_value_forecast_fn(calls=None, extra_draws=0):
     """A ``forecast_fn`` that repeats the last value and records its arguments."""
 
@@ -303,14 +336,23 @@ class TestForecasterProtocol:
         truth = data.isel(time=slice(25, 30)).rename(time="time_future")
         assert result.metrics["mae"] == eval_mae(result.prediction, truth)
 
-    def test_batch_size_forwarded_to_forecaster(self):
+    @pytest.mark.parametrize(
+        "forecaster_cls",
+        [
+            BatchedLastValueForecaster,
+            functools.partial(BatchedLastValueForecaster),
+            KwargsLastValueForecaster,
+        ],
+        ids=["keyword", "partial", "var-keyword"],
+    )
+    def test_batch_size_forwarded_to_forecaster(self, forecaster_cls):
         data, cov = make_trend_data(t_obs=12, horizon=0)
         log = []
         backtest(
             data,
             cov,
             None,
-            forecaster_cls=BatchedLastValueForecaster,
+            forecaster_cls=forecaster_cls,
             forecaster_options={"log": log},
             min_train_window=10,
             num_samples=8,
@@ -318,6 +360,38 @@ class TestForecasterProtocol:
             random_seed=SEED,
         )
         assert [entry for entry in log if entry[0] == "batch_size"] == [("batch_size", 4)] * 2
+
+    @pytest.mark.parametrize(
+        ("forecaster_cls", "eval_train", "method"),
+        [
+            (UnfittableForecaster, False, "forecast"),
+            (UnfittableInSampleForecaster, True, "predict_in_sample"),
+        ],
+    )
+    def test_batch_size_unsupported_rejected_at_entry(self, forecaster_cls, eval_train, method):
+        data, cov = make_trend_data(t_obs=12, horizon=0)
+        with pytest.raises(TypeError, match=rf"\.{method} does not accept batch_size"):
+            backtest(
+                data,
+                cov,
+                None,
+                forecaster_cls=forecaster_cls,
+                min_train_window=10,
+                batch_size=4,
+                eval_train=eval_train,
+            )
+
+    def test_missing_var_name_lists_the_predictions(self):
+        data, cov = make_trend_data(t_obs=12, horizon=0)
+        with pytest.raises(KeyError, match=r"revenue_future.*\['forecast'\]"):
+            backtest(
+                data,
+                cov,
+                None,
+                forecaster_cls=LastValueForecaster,
+                var_name="revenue_future",
+                min_train_window=10,
+            )
 
     def test_minimal_forecaster_without_batch_size(self):
         data, cov = make_trend_data(t_obs=12, horizon=0)
@@ -496,11 +570,35 @@ class TestForecastFn:
         with pytest.raises(AlignmentError):
             backtest(data, misalign(cov), None, forecast_fn=never_called, min_train_window=10)
 
+    def test_covariates_with_other_series_labels_rejected_at_entry(self):
+        # The forecasters reject this per window; the closure path checks it at entry.
+        data, cov = make_trend_data(t_obs=12, horizon=0)
+        panel = data.expand_dims(series=["a", "b"], axis=1)
+        panel_cov = cov.expand_dims(series=["b", "a"], axis=1)
+        with pytest.raises(AlignmentError, match="series"):
+            backtest(panel, panel_cov, None, forecast_fn=never_called, min_train_window=10)
+
+    def test_stacked_sample_dim_accepted(self):
+        data, cov = make_trend_data(t_obs=12, horizon=0)
+        results = backtest(
+            data,
+            cov,
+            None,
+            forecast_fn=stacked(last_value_forecast_fn()),
+            in_sample_fn=stacked(last_value_in_sample_fn),
+            min_train_window=10,
+            num_samples=10,
+            eval_train=True,
+            random_seed=SEED,
+        )
+        for r in results:
+            assert r.num_samples == 2 * 10
+            assert set(r.metrics) == set(r.train_metrics) == {"mae", "rmse", "crps", "coverage"}
+
     def test_eval_train_does_not_change_the_forecast(self):
         data, cov = make_trend_data(t_obs=14, horizon=0)
         kwargs = dict(
             forecast_fn=last_value_forecast_fn(),
-            in_sample_fn=last_value_in_sample_fn,
             min_train_window=10,
             test_window=2,
             stride=2,
@@ -508,7 +606,9 @@ class TestForecastFn:
             random_seed=SEED,
         )
         without = backtest(data, cov, None, **kwargs)
-        with_train = backtest(data, cov, None, eval_train=True, **kwargs)
+        with_train = backtest(
+            data, cov, None, in_sample_fn=last_value_in_sample_fn, eval_train=True, **kwargs
+        )
         assert [r.metrics for r in without] == [r.metrics for r in with_train]
         assert all(set(r.train_metrics) == {"mae", "rmse", "crps", "coverage"} for r in with_train)
 
@@ -519,6 +619,7 @@ class TestForecastFn:
             ({"forecaster_options": {}}, "forecaster_options"),
             ({"var_name": "mu_future"}, "var_name"),
             ({"eval_train": True}, "in_sample_fn"),
+            ({"in_sample_fn": never_called}, "eval_train"),
         ],
     )
     def test_conflicting_arguments_rejected_at_entry(self, kwargs, match):
@@ -543,10 +644,10 @@ class TestForecastFn:
         ("returned", "error"),
         [
             (np.zeros((5, 2)), TypeError),
-            (xr.DataArray(np.zeros((5, 2)), dims=("draw", "time_future")), ValueError),
+            (xr.DataArray(np.zeros((5, 2)), dims=("obs", "time_future")), ValueError),
         ],
     )
-    def test_closure_must_return_chain_draw_dataarray(self, returned, error):
+    def test_closure_must_return_draws(self, returned, error):
         data, cov = make_trend_data(t_obs=12, horizon=0)
         with pytest.raises(error, match="forecast_fn must return"):
             backtest(data, cov, None, forecast_fn=lambda *a, **k: returned, min_train_window=10)
@@ -672,6 +773,54 @@ class TestDatasetData:
                 min_train_window=12,
             )
 
+    def test_covariates_with_other_labels_rejected_at_entry(self):
+        # The first table has no ``age`` dim, so only the second one shows the mismatch.
+        panel = make_panel()
+        total = xr.Dataset({"total": ("time", np.ones(24))}, coords={"time": panel["time"]})
+        panel = xr.merge([total, panel])
+        cov = xr.DataArray(
+            np.zeros((24, 2)), dims=("time", "age"), coords={"time": panel["time"], "age": [7, 8]}
+        )
+        with pytest.raises(AlignmentError, match=r"variable '(retained|revenue)'.*'age'"):
+            backtest(
+                panel,
+                cov,
+                None,
+                forecast_fn=never_called,
+                transform=mean_revenue,
+                min_train_window=12,
+            )
+
+    def test_table_with_a_dim_the_covariates_lack_runs(self):
+        rng = np.random.default_rng(1)
+        panel = make_panel().assign(
+            plan_share=(("time", "age", "plan"), rng.dirichlet([1.0, 1.0], size=(24, 3))),
+        )
+        cov = xr.DataArray(
+            np.zeros((24, 3)),
+            dims=("time", "age"),
+            coords={"time": panel["time"], "age": panel["age"]},
+        )
+        results = backtest(
+            panel,
+            cov,
+            None,
+            forecast_fn=panel_forecast_fn(),
+            transform=mean_revenue,
+            min_train_window=12,
+            test_window=6,
+            stride=12,
+            random_seed=SEED,
+        )
+        assert [(r.t0, r.t1, r.t2) for r in results] == [(0, 12, 18)]
+
+
+def used_generator(seed):
+    """A generator that has already drawn numbers; its spawned children do not change."""
+    rng = np.random.default_rng(seed)
+    rng.normal(size=1_000)
+    return rng
+
 
 class TestRandomSeed:
     """Item D of #99: a ``numpy.random.Generator`` as the base seed."""
@@ -691,16 +840,22 @@ class TestRandomSeed:
             random_seed=random_seed,
         )
 
-    def test_fresh_generators_with_one_seed_agree(self):
-        first = self.run(np.random.default_rng(7))
-        second = self.run(np.random.default_rng(7))
-        for a, b in zip(first, second, strict=True):
+    @pytest.mark.parametrize(
+        "make_seed",
+        [np.random.default_rng, used_generator, np.random.SeedSequence],
+        ids=["generator", "used-generator", "seed-sequence"],
+    )
+    def test_fresh_seed_object_matches_the_integer_seed(self, make_seed):
+        expected = self.run(SEED)
+        got = self.run(make_seed(SEED))
+        for a, b in zip(expected, got, strict=True):
             xr.testing.assert_identical(a.prediction, b.prediction)
 
-    def test_reused_generator_spawns_new_streams(self):
-        rng = np.random.default_rng(7)
-        first = self.run(rng)
-        second = self.run(rng)
+    @pytest.mark.parametrize("make_seed", [np.random.default_rng, np.random.SeedSequence])
+    def test_reused_seed_object_spawns_new_streams(self, make_seed):
+        seed = make_seed(7)
+        first = self.run(seed)
+        second = self.run(seed)
         assert not np.array_equal(first[0].prediction.values, second[0].prediction.values)
 
     def test_integer_seed_is_reproducible_on_the_closure_path(self):
